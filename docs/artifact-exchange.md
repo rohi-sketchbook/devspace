@@ -36,8 +36,12 @@ file-object shape, trusted OpenAI download hosts, and redirects before streaming
 Malformed references, unknown fields, absolute paths, traversal, and symlinked
 parents are rejected.
 
-Downloads are streamed under `DEVSPACE_ARTIFACT_MAX_FILE_BYTES` and published as
-owner-only files without overwriting an existing destination. The tool is
-currently available on Linux. It is not registered on macOS, Windows, or BSD
-because Node.js does not expose the required descriptor-relative filesystem
-operations there.
+Downloads are streamed under `DEVSPACE_ARTIFACT_MAX_FILE_BYTES` and published
+without overwriting an existing destination.
+
+The upstream 1.0.7 baseline registers this tool on Linux. Rohi's local Windows
+build additionally enables Windows through a reviewed secure-filesystem port:
+destination directories are pinned with Win32 handles, reparse-point/junction
+escapes and Windows-reserved path forms are rejected, and publication remains
+exclusive. The Windows implementation uses the locally installed `koffi` 3.1.2
+runtime and does not depend on the old PR #103 checkout.

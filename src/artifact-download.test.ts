@@ -103,7 +103,7 @@ function testPlatformSupportContract(): void {
   assert.equal(isArtifactDownloadSupportedPlatform("freebsd"), false);
   assert.equal(isArtifactDownloadSupportedPlatform("openbsd"), false);
   assert.equal(isArtifactDownloadSupportedPlatform("netbsd"), false);
-  assert.equal(isArtifactDownloadSupportedPlatform("win32"), false);
+  assert.equal(isArtifactDownloadSupportedPlatform("win32"), true);
 }
 
 async function testUnsupportedPlatform(testRoot: string): Promise<void> {
@@ -165,7 +165,18 @@ async function testDestinationValidation(testRoot: string): Promise<void> {
   const workspaceRoot = join(testRoot, "workspace");
   await mkdir(workspaceRoot, { recursive: true });
 
-  for (const path of ["../outside.txt", "nested/../outside.txt", "/absolute.txt", "folder/"]) {
+  const invalidPaths = ["../outside.txt", "nested/../outside.txt", "/absolute.txt", "folder/"];
+  if (process.platform === "win32") {
+    invalidPaths.push(
+      "file.txt:stream",
+      "CON.txt",
+      "folder./file.txt",
+      "bad<name>.txt",
+      "C:drive-relative.txt",
+    );
+  }
+
+  for (const path of invalidPaths) {
     await expectArtifactError(
       downloadIncomingArtifact({
         registry: registryFor({ name: "blocked.txt", stream: Readable.from(["blocked"]) }),
@@ -258,13 +269,11 @@ async function testCrashLeftoverCleanup(testRoot: string): Promise<void> {
 }
 
 async function testSymlinkRejection(testRoot: string): Promise<void> {
-  if (process.platform === "win32") return;
-
   const outside = join(testRoot, "outside");
   await mkdir(outside, { recursive: true, mode: 0o700 });
 
   const linkedWorkspaceRoot = join(testRoot, "linked-workspace");
-  await symlink(outside, linkedWorkspaceRoot, "dir");
+  await symlink(outside, linkedWorkspaceRoot, process.platform === "win32" ? "junction" : "dir");
   await expectArtifactError(
     downloadIncomingArtifact({
       registry: registryFor({ name: "blocked.txt", stream: Readable.from(["blocked"]) }),
@@ -279,7 +288,11 @@ async function testSymlinkRejection(testRoot: string): Promise<void> {
 
   const linkedDestinationRoot = join(testRoot, "linked-destination-workspace");
   await mkdir(linkedDestinationRoot, { recursive: true });
-  await symlink(outside, join(linkedDestinationRoot, "assets"), "dir");
+  await symlink(
+    outside,
+    join(linkedDestinationRoot, "assets"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
   await expectArtifactError(
     downloadIncomingArtifact({
       registry: registryFor({ name: "blocked.txt", stream: Readable.from(["blocked"]) }),
@@ -323,6 +336,8 @@ async function testPublicationFailurePreservesReplacement(testRoot: string): Pro
 }
 
 async function testPublishedPermissions(testRoot: string): Promise<void> {
+  if (process.platform === "win32") return;
+
   const workspaceRoot = join(testRoot, "workspace");
   await mkdir(workspaceRoot, { recursive: true });
   const previousUmask = process.umask(0o077);

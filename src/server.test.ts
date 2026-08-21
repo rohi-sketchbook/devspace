@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -72,6 +72,42 @@ test("open_workspace keeps lifecycle flags out of model output and preserves com
     providerNote,
   );
   assert.ok(Array.isArray(card.agents));
+});
+
+test("Rohi local tools expose native image reads and guarded deletion", async (t) => {
+  const context = await fixture(t);
+  const opened = await callOpen(context.client, context.project, "chat-local-tools");
+  const workspaceId = structuredContent(opened).workspaceId as string;
+
+  const tools = await context.client.listTools();
+  const names = new Set(tools.tools.map((tool) => tool.name));
+  assert.equal(names.has("read_image"), true);
+  assert.equal(names.has("delete_path"), true);
+  assert.equal(names.has("git_cleanup"), true);
+
+  const imageBytes = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0x00, 0x00, 0x00, 0x00,
+  ]);
+  await writeFile(join(context.project, "reference.png"), imageBytes);
+  const imageResult = await context.client.callTool({
+    name: "read_image",
+    arguments: { workspaceId, path: "reference.png" },
+  });
+  const imageContent = (imageResult as { content?: Array<Record<string, unknown>> }).content ?? [];
+  assert.equal(imageContent[0]?.type, "image");
+  assert.equal(imageContent[0]?.mimeType, "image/png");
+  assert.equal(Buffer.from(String(imageContent[0]?.data), "base64").compare(imageBytes), 0);
+  assert.equal(structuredContent(imageResult).mimeType, "image/png");
+
+  const deleteTarget = join(context.project, "delete-me.txt");
+  await writeFile(deleteTarget, "delete me\n");
+  const deleteResult = await context.client.callTool({
+    name: "delete_path",
+    arguments: { workspaceId, path: "delete-me.txt" },
+  });
+  assert.equal(structuredContent(deleteResult).kind, "file");
+  await assert.rejects(() => stat(deleteTarget));
 });
 
 test("concurrent checkout opens return one full context and one reuse instruction", async (t) => {

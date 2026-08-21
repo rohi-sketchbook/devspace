@@ -48,9 +48,12 @@ an attached or generated file into an already-open workspace:
 DEVSPACE_ARTIFACTS=1 npx @waishnav/devspace serve
 ```
 
-This feature currently supports Linux. It is not registered on macOS, Windows,
-or BSD because the secure publication path depends on traversable,
-descriptor-anchored directory paths provided by Linux procfs.
+The upstream 1.0.7 baseline registers this feature on Linux. Rohi's local
+Windows build also registers it on Windows using a reviewed Win32
+secure-filesystem implementation backed by the locally installed `koffi` 3.1.2
+runtime. The Windows path rejects reparse-point/junction escapes and
+Windows-reserved path forms and preserves exclusive, no-overwrite publication.
+There is no runtime dependency on the old PR #103 checkout.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

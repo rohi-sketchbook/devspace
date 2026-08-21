@@ -14,6 +14,7 @@ import { registerAppTool } from "@modelcontextprotocol/ext-apps/server";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import { ArtifactError } from "./artifact-error.js";
+import { openWindowsArtifactTarget } from "./artifact-secure-filesystem-windows.js";
 import type { ServerConfig } from "./config.js";
 import {
   describeIncomingArtifactValue,
@@ -35,7 +36,7 @@ const PARTIAL_PREFIX = ".devspace-download-";
 const PARTIAL_SUFFIX = ".partial";
 const STALE_PARTIAL_AGE_MS = 24 * 60 * 60 * 1_000;
 const MAX_STALE_PARTIAL_CLEANUP = 32;
-const ARTIFACT_DOWNLOAD_PLATFORMS = new Set<NodeJS.Platform>(["linux"]);
+const ARTIFACT_DOWNLOAD_PLATFORMS = new Set<NodeJS.Platform>(["linux", "win32"]);
 
 const openAIFileReferenceInputSchema = z.strictObject({
   download_url: z.string(),
@@ -161,7 +162,7 @@ export async function downloadIncomingArtifact({
   if (!isArtifactDownloadSupportedPlatform()) {
     throw new ArtifactError(
       "artifact_platform_unsupported",
-      "Native file download requires descriptor-anchored directory operations on this platform.",
+      "Native file download requires secure platform filesystem primitives on this platform.",
     );
   }
   if (!Number.isSafeInteger(maxFileBytes) || maxFileBytes < 1) {
@@ -178,6 +179,17 @@ export async function downloadIncomingArtifact({
   }
 
   const destination = normalizeArtifactDestination(path);
+  if (process.platform === "win32") {
+    return downloadIncomingArtifactWindows({
+      registry,
+      workspaceRoot,
+      maxFileBytes,
+      file,
+      destination,
+      publishLink,
+    });
+  }
+
   const opened = await registry.open(file);
   let workspaceHandle: FileHandle | undefined;
   let destinationDirectory: SecureDestinationDirectory | undefined;
@@ -376,8 +388,78 @@ function descriptorDirectoryPath(handle: FileHandle): string {
   );
 }
 
+async function downloadIncomingArtifactWindows({
+  registry,
+  workspaceRoot,
+  maxFileBytes,
+  file,
+  destination,
+  publishLink,
+}: {
+  registry: IncomingArtifactAdapterRegistry;
+  workspaceRoot: string;
+  maxFileBytes: number;
+  file: unknown;
+  destination: ArtifactDestination;
+  publishLink: typeof link;
+}): Promise<DownloadIncomingArtifactResult> {
+  const opened = await registry.open(file);
+  let target: Awaited<ReturnType<typeof openWindowsArtifactTarget>> | undefined;
+
+  try {
+    if (opened.size !== undefined && opened.size > maxFileBytes) {
+      throw new ArtifactError(
+        "artifact_file_too_large",
+        "Native file exceeds the configured per-file limit.",
+      );
+    }
+
+    target = await openWindowsArtifactTarget({
+      workspaceRoot,
+      parentParts: destination.parentParts,
+      name: destination.name,
+      publishLink,
+    });
+
+    const hash = createHash("sha256");
+    let size = 0;
+    for await (const value of opened.stream) {
+      const chunk = incomingStreamChunk(value);
+      if (size + chunk.length > maxFileBytes) {
+        throw new ArtifactError(
+          "artifact_file_too_large",
+          "Native file exceeds the configured per-file limit.",
+        );
+      }
+      await target.writeAll(chunk, size);
+      hash.update(chunk);
+      size += chunk.length;
+    }
+
+    if (opened.size !== undefined && opened.size !== size) {
+      throw new ArtifactError(
+        "artifact_file_size_mismatch",
+        "Native file metadata did not match the downloaded content.",
+      );
+    }
+
+    await target.syncAndVerify(size);
+    await target.publish();
+    return {
+      path: destination.path,
+      size,
+      sha256: `sha256:${hash.digest("hex")}`,
+    };
+  } catch (error) {
+    opened.stream.destroy();
+    throw error;
+  } finally {
+    await target?.close().catch(() => undefined);
+  }
+}
+
 function normalizeArtifactDestination(value: string): ArtifactDestination {
-  const rawParts = value.split(sep);
+  const rawParts = process.platform === "win32" ? value.split(/[\\\\/]/) : value.split(sep);
   if (
     !value
     || value.includes("\u0000")
@@ -404,6 +486,7 @@ function normalizeArtifactDestination(value: string): ArtifactDestination {
   }
 
   const parts = normalized.split(sep);
+  if (process.platform === "win32") validateWindowsDestinationParts(parts);
   const name = parts.at(-1);
   if (!name || name === "." || name === "..") {
     throw new ArtifactError(
@@ -413,10 +496,29 @@ function normalizeArtifactDestination(value: string): ArtifactDestination {
   }
 
   return {
-    path: normalized,
+    path: parts.join("/"),
     parentParts: parts.slice(0, -1),
     name,
   };
+}
+
+function validateWindowsDestinationParts(parts: readonly string[]): void {
+  const reservedDevice = /^(?:CON|PRN|AUX|NUL|CLOCK\$|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)/i;
+  const forbiddenCharacter = /[<>:"|?*\u0000-\u001f]/;
+  for (const part of parts) {
+    if (
+      !part
+      || part.endsWith(".")
+      || part.endsWith(" ")
+      || forbiddenCharacter.test(part)
+      || reservedDevice.test(part)
+    ) {
+      throw new ArtifactError(
+        "artifact_destination_invalid",
+        "Artifact destination contains a Windows-reserved path segment.",
+      );
+    }
+  }
 }
 
 async function prepareDestinationDirectory(
