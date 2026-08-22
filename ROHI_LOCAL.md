@@ -8,6 +8,7 @@ This branch keeps Rohi's local DevSpace extensions on top of current `Waishnav/d
 - Validated baseline: `d9855aa5e115d25417ac84f0af807968a3dae063` (merged PR #207)
 - DevSpace version at migration: `1.0.7`
 - Local branch: `rohi/latest-main-local-port`
+- Local fork: `rohi-sketchbook/devspace` (`fork` remote). Keep `origin` pointed at `Waishnav/devspace` for upstream updates.
 
 The old PR #103 checkout remains available as a rollback reference, but the live branch no longer depends on its runtime files or node_modules.
 
