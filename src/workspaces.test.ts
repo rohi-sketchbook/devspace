@@ -14,6 +14,10 @@ const execFileAsync = promisify(execFile);
 
 test("a checkout exposes initial and nested instruction context while filtering outside symlinks", async (t) => {
   const context = await fixture(t);
+  for (const generatedDir of ["Library", "Temp", "Logs", "obj"]) {
+    await mkdir(join(context.root, generatedDir), { recursive: true });
+    await writeFile(join(context.root, generatedDir, "AGENTS.md"), "generated instructions must be ignored\n");
+  }
   const opened = await context.registry.openWorkspace(context.root);
 
   assert.match(opened.workspace.id, /^ws_[a-f0-9]{10}$/);

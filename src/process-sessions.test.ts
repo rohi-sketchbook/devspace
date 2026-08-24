@@ -28,6 +28,13 @@ assert.equal(unicodeResult.truncated, true);
 assert.match(unicodeResult.output, /^a🙂/);
 assert.match(unicodeResult.output, /🙂c$/);
 
+const sustainedOutput = new HeadTailBuffer(1_000);
+for (let index = 0; index < 10_000; index += 1) sustainedOutput.append("x".repeat(1_000));
+const sustainedResult = sustainedOutput.drain(2_000);
+assert.equal(sustainedResult.truncated, true);
+assert.ok(sustainedResult.output.length < 2_000);
+assert.match(sustainedResult.output, /characters omitted/);
+
 const manager = new ProcessSessionManager({
   maxBufferCharacters: 1_024,
   completedSessionTtlMs: 1_000,

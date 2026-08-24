@@ -509,6 +509,12 @@ const SKIPPED_CONTEXT_DIRS = new Set([
   ".next",
   ".turbo",
   ".cache",
+  // Unity-generated trees can contain tens of thousands of files and never own
+  // project instructions. Avoid traversing them when discovering nested context.
+  "library",
+  "temp",
+  "logs",
+  "obj",
 ]);
 
 export function formatAgentsPath(path: string, workspaceRoot: string | undefined): string {
@@ -569,7 +575,7 @@ async function walkWorkspace(
   for await (const entry of entries) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (!SKIPPED_CONTEXT_DIRS.has(entry.name)) {
+      if (!SKIPPED_CONTEXT_DIRS.has(entry.name.toLowerCase())) {
         await walkWorkspace(path, visit);
       }
       continue;

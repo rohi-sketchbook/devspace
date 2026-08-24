@@ -113,23 +113,66 @@ function processEnvironment(input?: {
   };
 }
 
-function codePointLength(value: string): number {
-  return Array.from(value).length;
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
 }
 
-function sliceCodePoints(value: string, start: number, end?: number): string {
-  return Array.from(value).slice(start, end).join("");
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+function codePointLength(value: string): number {
+  let length = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (
+      isHighSurrogate(code) &&
+      index + 1 < value.length &&
+      isLowSurrogate(value.charCodeAt(index + 1))
+    ) {
+      index += 1;
+    }
+    length += 1;
+  }
+  return length;
 }
 
 function takeHead(value: string, count: number): string {
-  if (count <= 0) return "";
-  return sliceCodePoints(value, 0, count);
+  if (count <= 0 || value.length === 0) return "";
+  let index = 0;
+  let taken = 0;
+  while (index < value.length && taken < count) {
+    const code = value.charCodeAt(index);
+    if (
+      isHighSurrogate(code) &&
+      index + 1 < value.length &&
+      isLowSurrogate(value.charCodeAt(index + 1))
+    ) {
+      index += 2;
+    } else {
+      index += 1;
+    }
+    taken += 1;
+  }
+  return value.slice(0, index);
 }
 
 function takeTail(value: string, count: number): string {
-  if (count <= 0) return "";
-  const characters = Array.from(value);
-  return characters.slice(Math.max(0, characters.length - count)).join("");
+  if (count <= 0 || value.length === 0) return "";
+  let index = value.length;
+  let taken = 0;
+  while (index > 0 && taken < count) {
+    index -= 1;
+    if (
+      isLowSurrogate(value.charCodeAt(index)) &&
+      index > 0 &&
+      isHighSurrogate(value.charCodeAt(index - 1))
+    ) {
+      index -= 1;
+    }
+    taken += 1;
+  }
+  return value.slice(index);
 }
 
 function splitBudget(maxCharacters: number): { head: number; tail: number } {
