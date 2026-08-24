@@ -48,7 +48,9 @@ const seededConfigDir = mkdtempSync(join(tmpdir(), "devspace-seeded-skills-test-
 const seededSkillPaths = ensureDevspaceDefaultSkills({ DEVSPACE_CONFIG_DIR: seededConfigDir });
 assert.deepEqual(seededSkillPaths, [join(seededConfigDir, "skills", "subagent-delegation", "SKILL.md")]);
 assert.equal(existsSync(seededSkillPaths[0]), true);
-assert.match(readFileSync(seededSkillPaths[0], "utf8"), /name: subagent-delegation/);
+const seededSubagentSkill = readFileSync(seededSkillPaths[0], "utf8");
+assert.match(seededSubagentSkill, /name: subagent-delegation/);
+assert.match(seededSubagentSkill, /Default to delegation for routine leaf work/);
 assert.deepEqual(ensureDevspaceDefaultSkills({ DEVSPACE_CONFIG_DIR: seededConfigDir }), []);
 
 assert.throws(

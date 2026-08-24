@@ -1,13 +1,15 @@
 ---
 name: subagent-delegation
-description: Delegate coding tasks to user-configured DevSpace subagents.
+description: Delegate bounded coding, investigation, and test work to user-configured DevSpace subagents. Use proactively during substantive development when a clear low-risk subtask can be split from host-owned design, integration, and final verification.
 ---
 
 # Subagent Delegation
 
-Use this skill when the user asks to delegate work, when the established user
-workflow delegates simple coding to a local worker, when another agent's opinion
-would help, or when parallel bounded work is useful.
+Use this skill proactively during substantive development whenever a bounded,
+low-risk subtask can be delegated with clear acceptance criteria. Do not wait
+for the user to explicitly ask for delegation. Also use it when the user names a
+subagent, asks for another agent's opinion, or when parallel bounded work is
+useful.
 
 The host remains the owner of architecture, ambiguous requirements, integration,
 and final verification. Never hide delegation: tell the user whenever a worker
@@ -34,17 +36,26 @@ until host review/integration and validation are finished.
 
 ## Routing policy
 
-Route conservatively. Keep the task with ChatGPT/host when it involves architecture,
-ambiguous product behavior, cross-cutting changes, destructive or externally visible
-actions, difficult debugging, runtime/GUI judgment, or integration of multiple
-subsystems.
+Default to delegation for routine leaf work that is bounded, low-risk, and has
+clear acceptance criteria. For every substantive coding task, actively look for
+one or more such subproblems; if they exist, delegate them without waiting for an
+explicit user request. Keep the host working on design, integration, review, or
+other independent work in parallel when useful.
 
-Delegate only bounded work with clear acceptance criteria:
+Keep architecture, ambiguous product behavior, cross-cutting design, destructive
+or externally visible actions, difficult debugging, runtime/GUI judgment,
+integration of multiple subsystems, and final verification with ChatGPT/host.
+
+Preferred routing:
 
 - Codex Terra (`gpt-5.6-terra`): focused implementation, mechanical refactors,
-  tests, and straightforward bug fixes.
-- Codex Luna (`gpt-5.6-luna`): read-only exploration, file discovery, simple
-  audits, and other lightweight high-throughput work.
+  tests, and straightforward bug fixes. Prefer Terra for routine code changes
+  that can be reviewed and integrated by the host afterward.
+- Codex Luna (`gpt-5.6-luna`): read-only exploration, file discovery, impact
+  analysis, simple audits, and other lightweight high-throughput work. Prefer
+  Luna early when repository discovery would otherwise occupy the host.
+- Host-only is appropriate for trivial edits where delegation overhead exceeds
+  the work, or when no safe independent subproblem exists.
 - If a delegated task becomes ambiguous, broad, repeatedly fails, or needs a
   design decision, stop delegating and return ownership to the host.
 
@@ -61,7 +72,11 @@ Use only these commands for normal delegation:
 
 Use the DevSpace CLI that belongs to the currently running server. DevSpace
 injects its path as `DEVSPACE_CLI_PATH` into workspace shell commands; do not
-use a different globally installed `devspace` executable.
+use a different globally installed `devspace` executable. If the variable is
+missing, treat that as a DevSpace integration/version mismatch: do not silently
+skip delegation and do not invoke a provider CLI directly. Report the failed
+worker start, return that subtask to the host, and verify/restart the DevSpace
+server before relying on subagents again.
 
 ```bash
 node "$DEVSPACE_CLI_PATH" agents ls
@@ -149,12 +164,13 @@ providers.
 Good delegation targets:
 
 - `reviewer`: second opinion, bug risk, security risk, test gaps.
-- `explorer`: read-only codebase investigation.
-- `implementer`: focused implementation when the user asked for delegation.
+- `explorer`: read-only codebase investigation and impact analysis.
+- `implementer`: focused implementation with clear acceptance criteria.
 
-Do not delegate ordinary coding work just because a profile exists. Use normal
-DevSpace tools unless the user asked for delegation, another agent's opinion,
-parallel work, or a named subagent.
+Prefer delegation for ordinary bounded coding and investigation work when an
+appropriate worker is available. Do not force delegation for tiny tasks, unsafe
+or ambiguous work, or work whose coordination cost is greater than simply doing
+it in the host.
 
 ## Worker prompts
 

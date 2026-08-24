@@ -145,11 +145,16 @@ Set `DEVSPACE_SKILLS=0` to hide skills from workspace output. Set
 `DEVSPACE_SUBAGENTS=1` to expose the experimental subagent catalog and
 `subagent-delegation` skill. That skill teaches the bounded
 `devspace agents ls`, `devspace agents run`, `devspace agents continue`,
-`devspace agents show`, and `devspace agents handoff` workflow. The host keeps
-architecture, ambiguous requirements, integration, and final verification;
-focused Codex writes are isolated in managed worktrees while read-only discovery
-may stay in the owner checkout. The catalog comes from `open_workspace`;
-`devspace agents ls` lists existing subagent sessions for that workspace.
+`devspace agents show`, and `devspace agents handoff` workflow. During substantive
+development, the host should proactively delegate clear low-risk leaf work such
+as repository discovery, impact analysis, focused implementation, mechanical
+refactors, and tests instead of waiting for an explicit delegation request. The
+host keeps architecture, ambiguous requirements, integration, runtime/GUI
+judgment, and final verification; focused Codex writes are isolated in managed
+worktrees while read-only discovery may stay in the owner checkout. Tiny tasks
+or work without a safe independent boundary may remain host-only. The catalog
+comes from `open_workspace`; `devspace agents ls` lists existing subagent
+sessions for that workspace.
 
 When a worker finishes or fails, DevSpace records its execution workspace,
 changed files, bounded command history, quota snapshot, and conflicts. A quota
