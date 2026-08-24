@@ -83,6 +83,10 @@ When changing a cross-cutting concept, check every surface it actually reaches:
 
 This is a map, not a requirement to touch every surface on every change. Avoid both incomplete contracts and speculative edits.
 
+## Git remotes
+
+For this DevSpace fork workflow, treat `fork` (`rohi-sketchbook/devspace`) as the default push destination. Keep `origin` (`Waishnav/devspace`) as the upstream/fetch remote. When a user explicitly asks to push DevSpace changes, use `fork` unless they explicitly request another remote.
+
 ## Pull requests
 
 Only create or update a PR when explicitly asked, and read `CONTRIBUTING.md` first. Keep a PR focused on one coherent concern and use a conventional title such as `fix:`, `feat:`, `docs:`, `refactor:`, or `chore:`.
