@@ -91,7 +91,7 @@ function terminalSize(value: number | undefined, fallback: number): number {
   return value;
 }
 
-function processEnvironment(input?: {
+export function devspaceProcessEnvironment(input?: {
   workspaceId?: string;
   workspaceRoot?: string;
 }): Record<string, string> {
@@ -375,7 +375,7 @@ export class ProcessSessionManager {
     const detached = process.platform !== "win32";
     const child = spawn(input.command, {
       cwd: input.cwd,
-      env: processEnvironment({
+      env: devspaceProcessEnvironment({
         workspaceId: input.workspaceId,
         workspaceRoot: input.workspaceRoot,
       }),
@@ -409,7 +409,7 @@ export class ProcessSessionManager {
     try {
       pty = nodePty.spawn(shell.executable, shell.args, {
         cwd: input.cwd,
-        env: processEnvironment({
+        env: devspaceProcessEnvironment({
           workspaceId: input.workspaceId,
           workspaceRoot: input.workspaceRoot,
         }),

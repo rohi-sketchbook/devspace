@@ -48,7 +48,11 @@ import {
   McpSessionRegistry,
   type McpSessionCloseResult,
 } from "./mcp-sessions.js";
-import { ProcessSessionManager, type ProcessSnapshot } from "./process-sessions.js";
+import {
+  devspaceProcessEnvironment,
+  ProcessSessionManager,
+  type ProcessSnapshot,
+} from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { openAiConversationScopeId } from "./request-meta.js";
 import { registerRohiLocalTools, rohiLocalToolInstruction } from "./rohi-local-tools.js";
@@ -1606,6 +1610,10 @@ export function createMcpServer(
       const response = await runShellTool(input, {
         cwd,
         root: workspace.root,
+        env: devspaceProcessEnvironment({
+          workspaceId,
+          workspaceRoot: workspace.root,
+        }),
       });
 
       if (response.isError) {

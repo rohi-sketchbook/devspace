@@ -536,7 +536,10 @@ function parseCompletedTurn(params: unknown, items: unknown[]): {
   failure?: string;
 } {
   const turn = asRecord(asRecord(params)?.turn);
-  const completedItems = (Array.isArray(turn?.items) ? turn.items : items).slice(-MAX_TURN_ITEMS);
+  const turnItems = Array.isArray(turn?.items) ? turn.items : undefined;
+  const completedItems = (
+    turnItems && turnItems.length > 0 ? turnItems : items
+  ).slice(-MAX_TURN_ITEMS);
   let finalResponse = "";
   for (const item of completedItems) {
     const record = asRecord(item);

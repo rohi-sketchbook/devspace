@@ -112,6 +112,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       }
       const item = { type: "agentMessage", text: "fake response " + turn };
       output({ method: "item/completed", params: { threadId: message.params.threadId, turnId, item } });
+      if (message.params.input[0].text === "streamed") {
+        output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "completed", items: [], itemsView: "notLoaded" } } });
+        return;
+      }
       output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "completed", items: [item] } } });
     });
   }
@@ -148,6 +152,14 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     assert.equal(first.providerUsage?.remainingPercent, 80);
     assert.equal(resumed.providerSessionId, "thread_new");
     assert.equal(resumed.finalResponse, "fake response 2");
+    const streamedResult = await runtime.run({
+      prompt: "streamed",
+      workspaceRoot: "/tmp/project",
+      providerSessionId: first.providerSessionId ?? undefined,
+    });
+    assert.equal(streamedResult.isOk(), true);
+    if (streamedResult.isErr()) throw streamedResult.error;
+    assert.equal(streamedResult.value.finalResponse, "fake response 3");
     const failed = await runtime.run({
       prompt: "fail",
       workspaceRoot: "/tmp/project",
