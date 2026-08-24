@@ -5,7 +5,7 @@ by the MCP server and not by an individual CLI invocation. The daemon is an
 internal implementation detail: the normal workflow remains:
 
 ```text
-devspace agents run/continue/show/ls
+devspace agents run/continue/show/handoff/ls
           │
           ▼
     devspace-agentd
@@ -64,6 +64,35 @@ retryable, ... } }`; successful `show`, `ls`, `run`, and `continue` output keeps
 the structured error fields on agent records when present.
 Successful `daemon status` and `daemon stop` output the daemon status object,
 and successful `daemon logs` output is `{ "logs": "<text>" }`.
+
+Provider quota exhaustion is stored separately as `PROVIDER_USAGE_LIMIT` rather
+than a generic execution failure. Codex performs a best-effort preflight
+`account/rateLimits/read` and, by default, reserves the last 10% of the shared
+Codex quota instead of starting another delegated turn. If that account method
+is unavailable for the active authentication/provider mode, execution continues
+and the normal turn-level usage-limit handling remains authoritative.
+
+Write-capable Codex tasks default to an isolated managed Git worktree. The daemon
+keeps the logical owner workspace separate from the execution workspace and
+refuses to fork a worker from a dirty owner checkout, because doing so would
+silently omit uncommitted owner changes. Read-only workers stay in the owner
+checkout. A read-only agent cannot later be escalated to write authority in that
+checkout; the host must start a fresh isolated write task.
+
+At turn completion or failure, DevSpace snapshots changed files and bounded
+command-execution metadata. It compares each managed worker against both the
+current owner checkout and sibling managed workers. Overlapping changed files
+are persisted as `conflictFiles` with `handoffReason=file_conflict`, so the host
+can review the integration instead of blindly applying it.
+
+Plain-text `agents show` emits `HOST_HANDOFF_RECOMMENDED` for quota exhaustion,
+provider failures, or detected file conflicts. `agents handoff <id>` returns the
+original task, owner/execution workspaces, base SHA, changed files, commands,
+provider usage, response/error, conflicts, and handoff reason. The supervising
+host should open the existing execution workspace in checkout mode, inspect the
+partial diff, finish or repair the work there, rerun verification, and only then
+integrate it. Provider session IDs remain persisted so a provider thread can be
+continued later when appropriate.
 
 Agent identity is explicit at the client boundary. `agents run` starts a new
 logical agent from a profile or provider; `agents continue <id>` continues an

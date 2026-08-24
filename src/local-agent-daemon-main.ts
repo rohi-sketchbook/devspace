@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { loadConfig } from "./config.js";
 import { createLocalAgentDrivers } from "./local-agent-adapters.js";
+import { createManagedWorktree } from "./git-worktrees.js";
 import { loadLocalAgentProfiles } from "./local-agent-profiles.js";
 import { LocalAgentDaemon, writeLocalAgentDaemonLog } from "./local-agent-daemon.js";
 import {
@@ -27,6 +28,14 @@ const manager = new LocalAgentManager({
   loadProfiles: (workspaceRoot) => loadLocalAgentProfiles(config, workspaceRoot, { includeDisabled: true }),
   agentDir: config.agentDir,
   allowedRoots: config.allowedRoots,
+  createWorktree: async (workspaceRoot) => {
+    const worktree = await createManagedWorktree({
+      sourcePath: workspaceRoot,
+      config,
+      requireCleanSource: true,
+    });
+    return { path: worktree.path, baseSha: worktree.baseSha };
+  },
   logger: log,
 });
 const daemon = new LocalAgentDaemon({

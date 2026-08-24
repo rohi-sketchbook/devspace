@@ -49,6 +49,17 @@ export class AgentScopeError extends TaggedError("AgentScopeError")<{
   message: string;
 }>() {}
 
+export type AgentIsolationErrorCode = "WORKTREE_SOURCE_DIRTY" | "WORKTREE_CREATE_FAILED";
+
+export class AgentIsolationError extends TaggedError("AgentIsolationError")<{
+  code: AgentIsolationErrorCode;
+  workspaceRoot: string;
+  operation: string;
+  retryable: boolean;
+  cause?: unknown;
+  message: string;
+}>() {}
+
 interface AgentProviderErrorFields extends Record<string, unknown> {
   provider: LocalAgentProvider;
   agentId?: string;
@@ -66,6 +77,10 @@ export class AgentProviderCancelledError extends TaggedError(
   "AgentProviderCancelledError",
 )<AgentProviderErrorFields & { code: "PROVIDER_CANCELLED" }>() {}
 
+export class AgentProviderUsageLimitError extends TaggedError(
+  "AgentProviderUsageLimitError",
+)<AgentProviderErrorFields & { code: "PROVIDER_USAGE_LIMIT" }>() {}
+
 export class AgentProviderProtocolError extends TaggedError(
   "AgentProviderProtocolError",
 )<AgentProviderErrorFields & { code: "PROVIDER_PROTOCOL_ERROR" }>() {}
@@ -77,6 +92,7 @@ export class AgentProviderExecutionError extends TaggedError(
 export type AgentProviderError =
   | AgentProviderUnavailableError
   | AgentProviderCancelledError
+  | AgentProviderUsageLimitError
   | AgentProviderProtocolError
   | AgentProviderExecutionError;
 
@@ -151,6 +167,7 @@ export type AgentManagerError =
   | AgentTargetError
   | AgentConflictError
   | AgentScopeError
+  | AgentIsolationError
   | AgentProviderError
   | AgentStoreError;
 
@@ -163,6 +180,7 @@ export interface AgentErrorPayload {
   provider?: LocalAgentProvider;
   agentId?: string;
   workspaceId?: string;
+  workspaceRoot?: string;
   operation?: string;
   target?: string;
 }
@@ -170,6 +188,7 @@ export interface AgentErrorPayload {
 export function isAgentProviderError(error: unknown): error is AgentProviderError {
   return AgentProviderUnavailableError.is(error)
     || AgentProviderCancelledError.is(error)
+    || AgentProviderUsageLimitError.is(error)
     || AgentProviderProtocolError.is(error)
     || AgentProviderExecutionError.is(error);
 }
@@ -189,6 +208,7 @@ export function isLocalAgentError(error: unknown): error is LocalAgentError {
   return AgentTargetError.is(error)
     || AgentConflictError.is(error)
     || AgentScopeError.is(error)
+    || AgentIsolationError.is(error)
     || isAgentProviderError(error)
     || AgentStoreError.is(error)
     || isAgentDaemonError(error);
@@ -199,8 +219,10 @@ export function toAgentErrorPayload(error: LocalAgentError): AgentErrorPayload {
     AgentTargetError: targetErrorPayload,
     AgentConflictError: conflictErrorPayload,
     AgentScopeError: scopeErrorPayload,
+    AgentIsolationError: isolationErrorPayload,
     AgentProviderUnavailableError: providerErrorPayload,
     AgentProviderCancelledError: providerErrorPayload,
+    AgentProviderUsageLimitError: providerErrorPayload,
     AgentProviderProtocolError: providerErrorPayload,
     AgentProviderExecutionError: providerErrorPayload,
     AgentDaemonUnavailableError: daemonErrorPayload,
@@ -222,6 +244,7 @@ export function agentErrorFromPayload(payload: {
   provider?: string;
   agentId?: string;
   workspaceId?: string;
+  workspaceRoot?: string;
   operation?: string;
   target?: string;
 }): LocalAgentError | undefined {
@@ -262,8 +285,18 @@ export function agentErrorFromPayload(payload: {
         retryable,
         message: payload.message,
       });
+    case "WORKTREE_SOURCE_DIRTY":
+    case "WORKTREE_CREATE_FAILED":
+      return new AgentIsolationError({
+        code: payload.code,
+        workspaceRoot: payload.workspaceRoot ?? "unknown",
+        operation: payload.operation ?? "start",
+        retryable,
+        message: payload.message,
+      });
     case "PROVIDER_UNAVAILABLE":
     case "PROVIDER_CANCELLED":
+    case "PROVIDER_USAGE_LIMIT":
     case "PROVIDER_PROTOCOL_ERROR":
     case "PROVIDER_EXECUTION_ERROR": {
       if (!provider) return undefined;
@@ -279,6 +312,9 @@ export function agentErrorFromPayload(payload: {
       }
       if (payload.code === "PROVIDER_CANCELLED") {
         return new AgentProviderCancelledError({ code: payload.code, ...fields });
+      }
+      if (payload.code === "PROVIDER_USAGE_LIMIT") {
+        return new AgentProviderUsageLimitError({ code: payload.code, ...fields });
       }
       if (payload.code === "PROVIDER_PROTOCOL_ERROR") {
         return new AgentProviderProtocolError({ code: payload.code, ...fields });
@@ -356,6 +392,17 @@ export function providerErrorFromCause(input: {
 }): AgentProviderError | undefined {
   if (isAgentProviderError(input.cause)) return input.cause;
   if (isLocalAgentError(input.cause)) return undefined;
+  if (isProviderUsageLimitCause(input.cause)) {
+    return new AgentProviderUsageLimitError({
+      code: "PROVIDER_USAGE_LIMIT",
+      provider: input.provider,
+      agentId: input.agentId,
+      operation: input.operation,
+      retryable: false,
+      cause: input.cause,
+      message: `${displayProvider(input.provider)} usage limit was reached.`,
+    });
+  }
   const unavailable = unavailableCauseKind(input.cause);
   if (unavailable) {
     return new AgentProviderUnavailableError({
@@ -409,6 +456,49 @@ export async function captureAgentProviderResult<T>(input: {
     if (!error) throw cause;
     return Result.err(error);
   }
+}
+
+export function isProviderUsageLimitCause(error: unknown): boolean {
+  const seen = new Set<object>();
+  const pending: unknown[] = [error];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === "string") {
+      if (usageLimitText(current)) return true;
+      continue;
+    }
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    const record = current as Record<string, unknown>;
+    for (const key of ["type", "code", "error_type"]) {
+      const value = record[key];
+      if (typeof value === "string" && usageLimitCode(value)) return true;
+    }
+    for (const key of ["message", "error", "cause", "data", "details", "body", "response", "turn", "reason"]) {
+      const value = record[key];
+      if (value !== undefined) pending.push(value);
+    }
+  }
+  return false;
+}
+
+function usageLimitCode(value: string): boolean {
+  const normalized = value.trim().toLowerCase().replaceAll("-", "_");
+  return normalized === "usage_limit_reached"
+    || normalized === "credits_exhausted"
+    || normalized === "credit_limit_reached"
+    || normalized === "insufficient_credits";
+}
+
+function usageLimitText(value: string): boolean {
+  const normalized = value.toLowerCase().replaceAll("’", "'");
+  return normalized.includes("you've hit your usage limit")
+    || normalized.includes("usage limit has been reached")
+    || normalized.includes("usage limit reached")
+    || normalized.includes("credits exhausted")
+    || normalized.includes("credits are exhausted")
+    || normalized.includes("out of credits")
+    || normalized.includes("insufficient credits");
 }
 
 export function isProgrammerDefect(error: unknown): boolean {
@@ -482,6 +572,16 @@ function scopeErrorPayload(error: AgentScopeError): AgentErrorPayload {
     operation: error.operation,
     ...(error.agentId ? { agentId: error.agentId } : {}),
     ...(error.workspaceId ? { workspaceId: error.workspaceId } : {}),
+  };
+}
+
+function isolationErrorPayload(error: AgentIsolationError): AgentErrorPayload {
+  return {
+    code: error.code,
+    message: error.message,
+    retryable: error.retryable,
+    operation: error.operation,
+    workspaceRoot: error.workspaceRoot,
   };
 }
 

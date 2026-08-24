@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { Result, type Result as BetterResult } from "better-result";
 import { openDatabase, type DatabaseHandle } from "./db/client.js";
 import { AgentStoreError, isProgrammerDefect } from "./local-agent-errors.js";
+import type { LocalAgentProviderUsage, LocalAgentWriteMode } from "./local-agent-runtime.js";
 
 export type LocalAgentStatus = "starting" | "running" | "idle" | "error" | "stopped";
 
@@ -10,16 +11,26 @@ export interface LocalAgentRecord {
   id: string;
   workspaceId?: string;
   workspaceRoot: string;
+  executionRoot?: string;
   profileName: string;
   provider: string;
   model?: string;
   thinking?: string;
+  writeMode?: LocalAgentWriteMode;
+  managedWorktree?: boolean;
+  baseSha?: string;
+  taskPrompt?: string;
   providerSessionId?: string;
   status: LocalAgentStatus;
   latestResponse?: string;
   error?: string;
   errorCode?: string;
   errorRetryable?: boolean;
+  changedFiles?: string[];
+  commandsRun?: string[];
+  conflictFiles?: string[];
+  handoffReason?: string;
+  providerUsage?: LocalAgentProviderUsage;
   createdAt: string;
   updatedAt: string;
 }
@@ -27,10 +38,15 @@ export interface LocalAgentRecord {
 export interface CreateLocalAgentRecordInput {
   workspaceId: string;
   workspaceRoot: string;
+  executionRoot?: string;
   profileName: string;
   provider: string;
   model?: string;
   thinking?: string;
+  writeMode?: LocalAgentWriteMode;
+  managedWorktree?: boolean;
+  baseSha?: string;
+  taskPrompt?: string;
 }
 
 export interface LocalAgentWorkspaceScope {
@@ -47,16 +63,26 @@ interface LocalAgentRow {
   id: string;
   workspace_id: string | null;
   workspace_root: string;
+  execution_root: string | null;
   profile_name: string;
   provider: string;
   model: string | null;
   thinking: string | null;
+  write_mode: string | null;
+  managed_worktree: string | null;
+  base_sha: string | null;
+  task_prompt: string | null;
   provider_session_id: string | null;
   status: string;
   latest_response: string | null;
   error: string | null;
   error_code: string | null;
   error_retryable: string | null;
+  changed_files_json: string | null;
+  commands_run_json: string | null;
+  conflict_files_json: string | null;
+  handoff_reason: string | null;
+  provider_usage_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -113,10 +139,15 @@ export class LocalAgentStore {
       id: `agt_${randomUUID().replaceAll("-", "").slice(0, 8)}`,
       workspaceId: input.workspaceId,
       workspaceRoot: resolve(input.workspaceRoot),
+      executionRoot: resolve(input.executionRoot ?? input.workspaceRoot),
       profileName: input.profileName,
       provider: input.provider,
       model: input.model,
       thinking: input.thinking,
+      writeMode: input.writeMode,
+      managedWorktree: input.managedWorktree,
+      baseSha: input.baseSha,
+      taskPrompt: input.taskPrompt,
       status: "starting",
       createdAt: now,
       updatedAt: now,
@@ -128,23 +159,33 @@ export class LocalAgentStore {
           id,
           workspace_id,
           workspace_root,
+          execution_root,
           profile_name,
           provider,
           model,
           thinking,
+          write_mode,
+          managed_worktree,
+          base_sha,
+          task_prompt,
           status,
           created_at,
           updated_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
         record.workspaceId ?? null,
         record.workspaceRoot,
+        record.executionRoot ?? record.workspaceRoot,
         record.profileName,
         record.provider,
         record.model ?? null,
         record.thinking ?? null,
+        record.writeMode ?? null,
+        record.managedWorktree === undefined ? null : String(record.managedWorktree),
+        record.baseSha ?? null,
+        record.taskPrompt ?? null,
         record.status,
         record.createdAt,
         record.updatedAt,
@@ -195,32 +236,52 @@ export class LocalAgentStore {
         `update local_agent_sessions set
           workspace_id = ?,
           workspace_root = ?,
+          execution_root = ?,
           profile_name = ?,
           provider = ?,
           model = ?,
           thinking = ?,
+          write_mode = ?,
+          managed_worktree = ?,
+          base_sha = ?,
+          task_prompt = ?,
           provider_session_id = ?,
           status = ?,
           latest_response = ?,
           error = ?,
           error_code = ?,
           error_retryable = ?,
+          changed_files_json = ?,
+          commands_run_json = ?,
+          conflict_files_json = ?,
+          handoff_reason = ?,
+          provider_usage_json = ?,
           updated_at = ?
          where id = ?`,
       )
       .run(
         updated.workspaceId ?? null,
         resolve(updated.workspaceRoot),
+        resolve(updated.executionRoot ?? updated.workspaceRoot),
         updated.profileName,
         updated.provider,
         updated.model ?? null,
         updated.thinking ?? null,
+        updated.writeMode ?? null,
+        updated.managedWorktree === undefined ? null : String(updated.managedWorktree),
+        updated.baseSha ?? null,
+        updated.taskPrompt ?? null,
         updated.providerSessionId ?? null,
         updated.status,
         updated.latestResponse ?? null,
         updated.error ?? null,
         updated.errorCode ?? null,
         updated.errorRetryable === undefined ? null : String(updated.errorRetryable),
+        encodeStringArray(updated.changedFiles),
+        encodeStringArray(updated.commandsRun),
+        encodeStringArray(updated.conflictFiles),
+        updated.handoffReason ?? null,
+        updated.providerUsage ? JSON.stringify(updated.providerUsage) : null,
         updated.updatedAt,
         updated.id,
       );
@@ -268,19 +329,60 @@ function rowToLocalAgentRecord(row: LocalAgentRow): LocalAgentRecord {
     id: row.id,
     workspaceId: row.workspace_id ?? undefined,
     workspaceRoot: row.workspace_root,
+    executionRoot: row.execution_root ?? row.workspace_root,
     profileName: row.profile_name,
     provider: row.provider,
     model: row.model ?? undefined,
     thinking: row.thinking ?? undefined,
+    writeMode: readWriteMode(row.write_mode),
+    managedWorktree: readOptionalBoolean(row.managed_worktree),
+    baseSha: row.base_sha ?? undefined,
+    taskPrompt: row.task_prompt ?? undefined,
     providerSessionId: row.provider_session_id ?? undefined,
     status: readStatus(row.status),
     latestResponse: row.latest_response ?? undefined,
     error: row.error ?? undefined,
     errorCode: row.error_code ?? undefined,
     errorRetryable: readOptionalBoolean(row.error_retryable),
+    changedFiles: decodeStringArray(row.changed_files_json),
+    commandsRun: decodeStringArray(row.commands_run_json),
+    conflictFiles: decodeStringArray(row.conflict_files_json),
+    handoffReason: row.handoff_reason ?? undefined,
+    providerUsage: decodeProviderUsage(row.provider_usage_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function encodeStringArray(value: string[] | undefined): string | null {
+  return value === undefined ? null : JSON.stringify(value);
+}
+
+function decodeStringArray(value: string | null): string[] | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeProviderUsage(value: string | null): LocalAgentProviderUsage | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as LocalAgentProviderUsage
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readWriteMode(value: string | null): LocalAgentWriteMode | undefined {
+  if (value === "read_only" || value === "allowed" || value === "full_access") return value;
+  return undefined;
 }
 
 function readOptionalBoolean(value: string | null): boolean | undefined {

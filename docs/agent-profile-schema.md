@@ -9,7 +9,9 @@ When subagents are enabled, the internal `devspace-agentd` process owns the
 durable agent manager and live provider runtimes. `devspace agents run` is a
 thin local client that starts or reuses the daemon automatically; `devspace
 serve` is not required. A run returns an agent id immediately, while the daemon
-persists its status, latest response, and provider session id.
+persists its status, latest response, provider session id, execution workspace,
+changed-file snapshot, executed-command summary, quota snapshot, conflicts, and
+handoff reason.
 
 Profiles are discovered from:
 
@@ -26,8 +28,10 @@ schema: devspace-agent/v1
 name: reviewer
 description: Read-only reviewer for bugs, security risks, and missing tests.
 provider: codex
-model: gpt-5.4
-thinking: high
+model: gpt-5.6-terra
+thinking: medium
+writeMode: read_only
+isolation: checkout
 disabled: false
 ---
 
@@ -96,7 +100,7 @@ through its Node SDK.
 Optional provider model id or alias.
 
 ```yaml
-model: gpt-5.4
+model: gpt-5.6-terra
 model: sonnet
 ```
 
@@ -119,6 +123,36 @@ DevSpace passes this through to providers that expose a matching control:
 - `pi`: the AgentSession thinking-level control.
 - `opencode`: model variant.
 - `cursor` and `copilot`: ACP thought-level config when supported.
+
+### `writeMode`
+
+Optional execution authority:
+
+```yaml
+writeMode: read_only
+writeMode: allowed
+writeMode: full_access
+```
+
+`read_only` prevents file mutation. `allowed` uses the provider's normal
+workspace-write sandbox. `full_access` is intentionally explicit and should not
+be used for routine delegated work.
+
+### `isolation`
+
+Optional execution-workspace policy:
+
+```yaml
+isolation: auto
+isolation: worktree
+isolation: checkout
+```
+
+For Codex write-capable tasks, `auto` isolates the worker in a managed Git
+worktree. `worktree` requires isolation. `checkout` runs in the owner checkout
+and should normally be reserved for read-only work. DevSpace refuses to create
+a write-worker worktree from a dirty source checkout because uncommitted owner
+changes would not be present in the new worktree.
 
 ### `disabled`
 
@@ -149,6 +183,7 @@ devspace agents ls
 devspace agents run <profile-or-provider> "<prompt>"
 devspace agents continue <id> "<prompt>"
 devspace agents show <id>
+devspace agents handoff <id>
 ```
 
 `open_workspace` exposes compact profile metadata:
@@ -158,8 +193,10 @@ devspace agents show <id>
   "name": "reviewer",
   "description": "Read-only reviewer for bugs, security risks, and missing tests.",
   "provider": "codex",
-  "model": "gpt-5.4",
-  "thinking": "high"
+  "model": "gpt-5.6-terra",
+  "thinking": "medium",
+  "writeMode": "read_only",
+  "isolation": "checkout"
 }
 ```
 
@@ -172,6 +209,12 @@ accepted as substitutes.
 
 The full profile body stays out of the model context until DevSpace launches the
 profile.
+
+For a running or completed task, `agents handoff <id>` surfaces the owner and
+execution workspaces, base SHA, original task, changed files, executed commands,
+provider usage, latest response/error, conflict files, and any host-handoff
+reason. Write-capable Codex tasks use an isolated execution workspace by default;
+the owner workspace remains the scope used to locate and list the logical agent.
 
 ## Runtime lifecycle
 
@@ -190,7 +233,9 @@ server can restart independently because it does not own this state.
 ## Current non-goals
 
 - Custom or arbitrary CLI-backed agents.
-- Inferring changed files, tests, or diffs from worker output.
+- Inferring semantic test success from worker prose. DevSpace records command
+  execution and working-tree state, but the host remains responsible for final
+  verification.
 - Exposing raw provider transcripts by default.
 - Teaching the model provider-specific CLIs.
 - First-class MCP agent tools. Future tools should call the same local agent

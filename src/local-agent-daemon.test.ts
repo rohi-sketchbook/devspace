@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { daemonExecArgv, LocalAgentClient } from "./local-agent-client.js";
 import { LocalAgentDaemon, type LocalAgentDaemonManager } from "./local-agent-daemon.js";
 import {
+  LOCAL_AGENT_DAEMON_PROTOCOL_VERSION,
   ensureLocalAgentDaemonSecret,
   localAgentDaemonPaths,
 } from "./local-agent-daemon-lifecycle.js";
@@ -323,7 +324,7 @@ try {
 
   const unauthorized = await sendRawRequest(socketDaemon.paths.endpoint, JSON.stringify({
     requestId: "unauthorized",
-    protocolVersion: 1,
+    protocolVersion: LOCAL_AGENT_DAEMON_PROTOCOL_VERSION,
     authToken: "wrong-secret",
     method: "hello",
     params: {},

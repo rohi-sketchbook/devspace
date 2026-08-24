@@ -32,6 +32,11 @@ const migrations: Migration[] = [
     name: "local-agent-structured-errors",
     up: migrateLocalAgentStructuredErrors,
   },
+  {
+    version: 6,
+    name: "local-agent-task-handoff",
+    up: migrateLocalAgentTaskHandoff,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -206,6 +211,20 @@ function migrateWorkspaceConversationBindings(sqlite: Database.Database): void {
 function migrateLocalAgentStructuredErrors(sqlite: Database.Database): void {
   addColumnIfMissing(sqlite, "local_agent_sessions", "error_code", "text");
   addColumnIfMissing(sqlite, "local_agent_sessions", "error_retryable", "text");
+}
+
+function migrateLocalAgentTaskHandoff(sqlite: Database.Database): void {
+  addColumnIfMissing(sqlite, "local_agent_sessions", "execution_root", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "write_mode", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "managed_worktree", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "base_sha", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "task_prompt", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "changed_files_json", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "commands_run_json", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "conflict_files_json", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "handoff_reason", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "provider_usage_json", "text");
+  sqlite.exec(`update local_agent_sessions set execution_root = workspace_root where execution_root is null`);
 }
 
 function addColumnIfMissing(

@@ -17,8 +17,13 @@ try {
     workspaceRoot: join(root, "project"),
     profileName: "reviewer",
     provider: "codex",
-    model: "gpt-5.4",
+    model: "gpt-5.6-terra",
     thinking: "high",
+    writeMode: "allowed",
+    executionRoot: join(root, "worktree"),
+    managedWorktree: true,
+    baseSha: "abc123",
+    taskPrompt: "implement feature",
   });
 
   assert.match(created.id, /^agt_[a-f0-9]{8}$/);
@@ -35,6 +40,11 @@ try {
     error: "Codex executable was not found.",
     errorCode: "PROVIDER_UNAVAILABLE",
     errorRetryable: false,
+    changedFiles: ["src/a.ts"],
+    commandsRun: ["npm test"],
+    conflictFiles: ["src/a.ts"],
+    handoffReason: "file_conflict",
+    providerUsage: { usedPercent: 42, remainingPercent: 58, source: "codex" },
   });
 
   assert.equal(updated.status, "error");
@@ -46,6 +56,15 @@ try {
   assert.equal(storedError?.error, "Codex executable was not found.");
   assert.equal(storedError?.errorCode, "PROVIDER_UNAVAILABLE");
   assert.equal(storedError?.errorRetryable, false);
+  assert.equal(storedError?.executionRoot, join(root, "worktree"));
+  assert.equal(storedError?.managedWorktree, true);
+  assert.equal(storedError?.baseSha, "abc123");
+  assert.equal(storedError?.taskPrompt, "implement feature");
+  assert.deepEqual(storedError?.changedFiles, ["src/a.ts"]);
+  assert.deepEqual(storedError?.commandsRun, ["npm test"]);
+  assert.deepEqual(storedError?.conflictFiles, ["src/a.ts"]);
+  assert.equal(storedError?.handoffReason, "file_conflict");
+  assert.equal(storedError?.providerUsage?.usedPercent, 42);
   assert.equal(store.update(created.id, { latestResponse: undefined }).latestResponse, undefined);
   assert.deepEqual(
     store.list({ workspaceRoot: join(root, "project") }).map((agent) => agent.latestResponse),

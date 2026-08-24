@@ -6,12 +6,15 @@ import {
   AgentProviderExecutionError,
   AgentProviderProtocolError,
   AgentProviderUnavailableError,
+  AgentProviderUsageLimitError,
   captureAgentProviderResult,
+  isProviderUsageLimitCause,
 } from "./local-agent-errors.js";
 import { removeDevspaceNodeModulesBinFromPath } from "./local-agent-path.js";
 import { terminateProcessTree } from "./process-platform.js";
 import type {
   LocalAgentDriver,
+  LocalAgentProviderUsage,
   LocalAgentRunCallbacks,
   LocalAgentRunInput,
   LocalAgentRunResult,
@@ -129,6 +132,21 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
             message: "Codex app-server is not running.",
           });
         }
+        const providerUsage = await this.readProviderUsage();
+        const usageThresholdPercent = input.usageThresholdPercent ?? 90;
+        if (
+          providerUsage?.usedPercent !== undefined
+          && providerUsage.usedPercent >= usageThresholdPercent
+        ) {
+          throw new AgentProviderUsageLimitError({
+            code: "PROVIDER_USAGE_LIMIT",
+            provider: this.provider,
+            operation: "preflight_usage_check",
+            retryable: false,
+            cause: { providerUsage, preflight: true },
+            message: `Codex usage is ${providerUsage.usedPercent}% used; DevSpace reserved the remaining quota for higher-priority work.`,
+          });
+        }
         const threadResponse = await this.rpc.request(
           input.providerSessionId ? "thread/resume" : "thread/start",
           threadParams(input),
@@ -149,12 +167,22 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
         const completed = await this.rpc.runTurn(threadId, turnParams(input, threadId));
         const parsed = parseCompletedTurn(completed.event.params, completed.items);
         if (parsed.failure) {
+          if (isProviderUsageLimitCause(completed.event.params) || isProviderUsageLimitCause(parsed.failure)) {
+            throw new AgentProviderUsageLimitError({
+              code: "PROVIDER_USAGE_LIMIT",
+              provider: this.provider,
+              operation: "run",
+              retryable: false,
+              cause: { event: completed.event.params, items: parsed.items, providerUsage },
+              message: parsed.failure,
+            });
+          }
           throw new AgentProviderExecutionError({
             code: "PROVIDER_EXECUTION_ERROR",
             provider: this.provider,
             operation: "run",
             retryable: false,
-            cause: completed.event.params,
+            cause: { event: completed.event.params, items: parsed.items, providerUsage },
             message: "Codex agent turn failed.",
           });
         }
@@ -164,7 +192,7 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
             provider: this.provider,
             operation: "run",
             retryable: false,
-            cause: completed.event.params,
+            cause: { event: completed.event.params, items: parsed.items, providerUsage },
             message: "Codex did not return a final assistant response.",
           });
         }
@@ -173,9 +201,21 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
           providerSessionId: threadId,
           finalResponse: parsed.finalResponse.trim(),
           items: parsed.items,
+          providerUsage,
         };
       },
     });
+  }
+
+  private async readProviderUsage(): Promise<LocalAgentProviderUsage | undefined> {
+    try {
+      const response = await this.rpc.request("account/rateLimits/read", {});
+      return parseCodexProviderUsage(response);
+    } catch {
+      // ChatGPT quota data is not available for every auth/provider mode. The
+      // preflight is advisory; a real usage-limit error is still handled by the turn path.
+      return undefined;
+    }
   }
 
   async releaseSession(providerSessionId: string): Promise<void> {
@@ -520,6 +560,47 @@ export function codexAppServerError(message: string, version?: string, stderr?: 
     version ? `codex version: ${version}` : undefined,
     stderr?.trim() ? `stderr:\n${stderr.trim()}` : undefined,
   ].filter(Boolean).join("\n"));
+}
+
+export function parseCodexProviderUsage(value: unknown): LocalAgentProviderUsage | undefined {
+  const response = asRecord(value);
+  const byLimitId = asRecord(response?.rateLimitsByLimitId);
+  const shared = asRecord(byLimitId?.codex) ?? asRecord(response?.rateLimits);
+  if (!shared) return undefined;
+
+  const primary = asRecord(shared.primary);
+  const secondary = asRecord(shared.secondary);
+  const windows = [primary, secondary].filter((window): window is Record<string, unknown> => Boolean(window));
+  let usedPercent: number | undefined;
+  let resetsAt: number | undefined;
+  for (const window of windows) {
+    const used = typeof window.usedPercent === "number" ? window.usedPercent : undefined;
+    if (used === undefined) continue;
+    if (usedPercent === undefined || used > usedPercent) {
+      usedPercent = used;
+      resetsAt = typeof window.resetsAt === "number" ? window.resetsAt : undefined;
+    }
+  }
+
+  const individual = asRecord(shared.individualLimit);
+  const individualRemaining = typeof individual?.remainingPercent === "number"
+    ? individual.remainingPercent
+    : undefined;
+  if (individualRemaining !== undefined) {
+    const individualUsed = Math.max(0, Math.min(100, 100 - individualRemaining));
+    if (usedPercent === undefined || individualUsed > usedPercent) {
+      usedPercent = individualUsed;
+      resetsAt = typeof individual?.resetsAt === "number" ? individual.resetsAt : resetsAt;
+    }
+  }
+  if (shared.spendControlReached === true) usedPercent = 100;
+  if (usedPercent === undefined) return undefined;
+  return {
+    usedPercent,
+    remainingPercent: Math.max(0, 100 - usedPercent),
+    resetsAt,
+    source: typeof shared.limitId === "string" ? shared.limitId : "codex",
+  };
 }
 
 function commandCandidates(command: string, env: NodeJS.ProcessEnv): string[] {

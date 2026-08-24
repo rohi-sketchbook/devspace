@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { resolveShellCommand, terminateProcessTree } from "./process-platform.js";
+
+const DEVSPACE_CLI_PATH = join(dirname(fileURLToPath(import.meta.url)), "cli.js");
 
 const DEFAULT_EXEC_YIELD_MS = 10_000;
 const DEFAULT_INTERACTIVE_YIELD_MS = 250;
@@ -101,6 +105,7 @@ function processEnvironment(input?: {
     GIT_PAGER: "cat",
     GH_PAGER: "cat",
     CODEX_CI: "1",
+    DEVSPACE_CLI_PATH,
     LANG: process.env.LANG ?? "C.UTF-8",
     LC_ALL: process.env.LC_ALL ?? "C.UTF-8",
     ...(input?.workspaceId ? { DEVSPACE_WORKSPACE_ID: input.workspaceId } : {}),

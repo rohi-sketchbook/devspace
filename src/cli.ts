@@ -299,9 +299,10 @@ function printHelp(): void {
       "  devspace config get      Print persisted config",
       "  devspace config set publicBaseUrl <url|null>",
       "  devspace agents ls       List subagent sessions",
-      "  devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] <prompt>",
-      "  devspace agents continue <id> [--model <model>] [--thinking <level>] <prompt>",
+      "  devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--isolation <mode>] <prompt>",
+      "  devspace agents continue <id> [--model <model>] [--thinking <level>] [--write-mode <mode>] <prompt>",
       "  devspace agents show <id>",
+      "  devspace agents handoff <id>",
       "  devspace agents daemon <status|stop|logs>",
       "  devspace -v, --version   Print the installed version",
       "",
@@ -328,6 +329,9 @@ async function runAgentsCommand(args: string[]): Promise<void> {
       return;
     case "show":
       await runAgentsShow(commandArgs, json);
+      return;
+    case "handoff":
+      await runAgentsHandoff(commandArgs, json);
       return;
     case "daemon":
       await runAgentsDaemon(commandArgs, json);
@@ -377,6 +381,9 @@ async function runAgentsRun(args: string[], json: boolean): Promise<void> {
     workspaceId: scope.workspaceId,
     model: parsed.model,
     thinking: parsed.thinking,
+    writeMode: parsed.writeMode,
+    isolation: parsed.isolation,
+    usageThresholdPercent: parsed.usageThresholdPercent,
   });
   const record = presentAgentResult(result, json);
   if (!record) return;
@@ -395,6 +402,8 @@ async function runAgentsContinue(args: string[], json: boolean): Promise<void> {
   const result = await client.continue(parsed.agentId, parsed.prompt, {
     model: parsed.model,
     thinking: parsed.thinking,
+    writeMode: parsed.writeMode,
+    usageThresholdPercent: parsed.usageThresholdPercent,
   }, scope);
   const record = presentAgentResult(result, json);
   if (!record) return;
@@ -430,17 +439,49 @@ async function runAgentsShow(args: string[], json: boolean): Promise<void> {
   }
 
   console.log(formatAgentLine(record));
-  if (record.latestResponse) {
-    console.log(record.latestResponse);
-    return;
-  }
-  if (record.error) {
-    console.log(record.error);
-    return;
-  }
-  if (record.status === "starting" || record.status === "running") {
+  if (record.latestResponse) console.log(record.latestResponse);
+  if (record.error) console.log(record.error);
+  printAgentHandoffSignal(record);
+  if (!record.latestResponse && !record.error && (record.status === "starting" || record.status === "running")) {
     console.log(`No final response yet. Call \`devspace agents show ${record.id}\` again later.`);
   }
+}
+
+async function runAgentsHandoff(args: string[], json: boolean): Promise<void> {
+  const [id] = args;
+  if (!id) throw new Error("Usage: devspace agents handoff <id>");
+  const config = loadConfig();
+  const client = createLocalAgentClient(config);
+  const scope = resolveCurrentWorkspaceScope();
+  const record = presentAgentResult(await client.get(id, scope), json);
+  if (!record) return;
+  if (json) {
+    console.log(JSON.stringify(record, null, 2));
+    return;
+  }
+  console.log(formatAgentLine(record));
+  console.log(`owner_workspace=${JSON.stringify(record.workspaceRoot)}`);
+  console.log(`execution_workspace=${JSON.stringify(record.executionRoot ?? record.workspaceRoot)}`);
+  if (record.baseSha) console.log(`base_sha=${record.baseSha}`);
+  if (record.taskPrompt) console.log(`task=${JSON.stringify(record.taskPrompt)}`);
+  if (record.changedFiles?.length) console.log(`changed_files=${JSON.stringify(record.changedFiles)}`);
+  if (record.commandsRun?.length) console.log(`commands_run=${JSON.stringify(record.commandsRun)}`);
+  if (record.conflictFiles?.length) console.log(`conflict_files=${JSON.stringify(record.conflictFiles)}`);
+  if (record.providerUsage) console.log(`provider_usage=${JSON.stringify(record.providerUsage)}`);
+  if (record.latestResponse) console.log(`latest_response=${JSON.stringify(record.latestResponse)}`);
+  if (record.error) console.log(`error=${JSON.stringify(record.error)}`);
+  printAgentHandoffSignal(record);
+}
+
+function printAgentHandoffSignal(record: LocalAgentRecord): void {
+  const reason = record.handoffReason ?? (record.errorCode === "PROVIDER_USAGE_LIMIT" ? "usage_limit" : undefined);
+  if (!reason) return;
+  const executionRoot = record.executionRoot ?? record.workspaceRoot;
+  console.log(`HOST_HANDOFF_RECOMMENDED agent=${record.id} provider=${record.provider} reason=${reason} workspace=${JSON.stringify(executionRoot)}`);
+  if (record.conflictFiles?.length) {
+    console.log(`Integration conflict guard: overlapping files ${JSON.stringify(record.conflictFiles)}. Review before applying any changes to the owner workspace.`);
+  }
+  console.log(`Continue with the host by opening the existing execution workspace ${JSON.stringify(executionRoot)} in checkout mode, inspect the partial diff, and rerun relevant verification before integration.`);
 }
 
 async function runAgentsDaemon(args: string[], json: boolean): Promise<void> {
@@ -488,11 +529,14 @@ function resolveCurrentWorkspaceScope(): { workspaceId: string; workspaceRoot: s
 
 function formatAgentLine(agent: Pick<
   LocalAgentRecord,
-  "id" | "status" | "profileName" | "provider" | "model" | "thinking"
+  "id" | "status" | "profileName" | "provider" | "model" | "thinking" | "writeMode" | "managedWorktree" | "handoffReason"
 >): string {
   const model = agent.model ? ` ${agent.model}` : "";
   const thinking = agent.thinking ? ` thinking=${agent.thinking}` : "";
-  return `${agent.id} ${agent.status} ${agent.profileName} ${agent.provider}${model}${thinking}`;
+  const writeMode = agent.writeMode ? ` write=${agent.writeMode}` : "";
+  const isolation = agent.managedWorktree ? " isolation=worktree" : "";
+  const handoff = agent.handoffReason ? ` handoff=${agent.handoffReason}` : "";
+  return `${agent.id} ${agent.status} ${agent.profileName} ${agent.provider}${model}${thinking}${writeMode}${isolation}${handoff}`;
 }
 
 function presentAgentResult<T, E extends LocalAgentError>(
@@ -505,7 +549,7 @@ function presentAgentResult<T, E extends LocalAgentError>(
     process.exitCode = 1;
     return undefined;
   }
-  throw new Error(result.error.message);
+  throw new Error(`${result.error.code}: ${result.error.message}`);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -519,9 +563,10 @@ function printAgentsHelp(): void {
       "",
       "Usage:",
       "  devspace agents ls [--json]",
-      "  devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] [--json] <prompt>",
-      "  devspace agents continue <id> [--model <model>] [--thinking <level>] [--json] <prompt>",
+      "  devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--isolation <mode>] [--usage-threshold <percent>] [--json] <prompt>",
+      "  devspace agents continue <id> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--usage-threshold <percent>] [--json] <prompt>",
       "  devspace agents show <id> [--json]",
+      "  devspace agents handoff <id> [--json]",
       "  devspace agents daemon <status|stop|logs> [--json]",
     ].join("\n"),
   );

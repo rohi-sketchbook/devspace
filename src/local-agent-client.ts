@@ -484,8 +484,10 @@ function isRequestError(
     AgentTargetError: () => "target" as const,
     AgentConflictError: () => "conflict" as const,
     AgentScopeError: () => "scope" as const,
+    AgentIsolationError: () => "isolation" as const,
     AgentProviderUnavailableError: () => "provider" as const,
     AgentProviderCancelledError: () => "provider" as const,
+    AgentProviderUsageLimitError: () => "provider" as const,
     AgentProviderProtocolError: () => "provider" as const,
     AgentProviderExecutionError: () => "provider" as const,
     AgentDaemonUnavailableError: () => "daemon" as const,
@@ -504,6 +506,7 @@ function isRequestError(
     case "agent.continue":
       return category === "target"
         || category === "scope"
+        || category === "isolation"
         || category === "conflict"
         || category === "store";
     case "agent.get":

@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { Result, type Result as BetterResult } from "better-result";
 import {
   AgentConflictError,
+  AgentIsolationError,
   AgentScopeError,
   AgentStoreError,
   AgentTargetError,
@@ -10,6 +11,7 @@ import {
   type LocalAgentError,
 } from "./local-agent-errors.js";
 import {
+  type LocalAgentIsolationMode,
   type LocalAgentProfile,
   type LocalAgentProvider,
   isLocalAgentProvider,
@@ -25,11 +27,13 @@ import {
 import {
   type LocalAgentDriver,
   type LocalAgentRunCallbacks,
+  type LocalAgentProviderUsage,
   type LocalAgentRunInput,
   type LocalAgentRuntimeContext,
   type LocalAgentWriteMode,
 } from "./local-agent-runtime.js";
 import { LocalAgentRuntimePool } from "./local-agent-runtime-pool.js";
+import { extractAgentCommands, inspectLocalAgentWorkspace, overlappingChangedFiles } from "./local-agent-workspace.js";
 import { assertAllowedPath } from "./roots.js";
 
 export interface StartLocalAgentInput {
@@ -40,16 +44,24 @@ export interface StartLocalAgentInput {
   model?: string;
   thinking?: string;
   writeMode?: LocalAgentWriteMode;
+  isolation?: LocalAgentIsolationMode;
+  usageThresholdPercent?: number;
 }
 
 export interface RunOverrides {
   model?: string;
   thinking?: string;
   writeMode?: LocalAgentWriteMode;
+  usageThresholdPercent?: number;
 }
 
 export interface LocalAgentManagerLogger {
   (level: "info" | "warn" | "error", event: string, fields: Record<string, unknown>): void;
+}
+
+export interface LocalAgentWorktreeAllocation {
+  path: string;
+  baseSha: string;
 }
 
 export interface LocalAgentManagerOptions {
@@ -59,10 +71,11 @@ export interface LocalAgentManagerOptions {
   loadProfiles: (workspaceRoot: string) => Promise<LocalAgentProfile[]>;
   agentDir?: string;
   allowedRoots?: readonly string[];
+  createWorktree?: (workspaceRoot: string) => Promise<LocalAgentWorktreeAllocation>;
   logger?: LocalAgentManagerLogger;
 }
 
-export type AgentStartError = AgentTargetError | AgentScopeError | AgentConflictError | AgentStoreError;
+export type AgentStartError = AgentTargetError | AgentScopeError | AgentIsolationError | AgentConflictError | AgentStoreError;
 export type AgentContinueError = AgentStartError;
 export type AgentLookupError = AgentTargetError | AgentScopeError | AgentStoreError;
 export type AgentListError = AgentScopeError | AgentStoreError;
@@ -79,6 +92,7 @@ export class LocalAgentManager {
   private readonly loadProfiles: (workspaceRoot: string) => Promise<LocalAgentProfile[]>;
   private readonly agentDir?: string;
   private readonly allowedRoots?: readonly string[];
+  private readonly createWorktree?: (workspaceRoot: string) => Promise<LocalAgentWorktreeAllocation>;
   private readonly logger?: LocalAgentManagerLogger;
   private readonly activeTurns = new Map<string, Promise<void>>();
   private accepting = true;
@@ -91,6 +105,7 @@ export class LocalAgentManager {
     this.loadProfiles = options.loadProfiles;
     this.agentDir = options.agentDir;
     this.allowedRoots = options.allowedRoots;
+    this.createWorktree = options.createWorktree;
     this.logger = options.logger;
   }
 
@@ -123,18 +138,32 @@ export class LocalAgentManager {
         }));
       }
       yield* manager.driverResult(target.provider, "start");
+      const writeMode = input.writeMode ?? (target.kind === "profile" ? target.profile.writeMode : undefined) ?? "allowed";
+      const isolation = input.isolation ?? (target.kind === "profile" ? target.profile.isolation : undefined) ?? "auto";
+      const execution = yield* Result.await(manager.executionWorkspaceResult(
+        workspaceRoot,
+        target.provider,
+        writeMode,
+        isolation,
+      ));
       const record = yield* manager.store.createResult({
         workspaceId: input.workspaceId,
         workspaceRoot,
+        executionRoot: execution.executionRoot,
         profileName: target.name,
         provider: target.provider,
         model: target.model,
         thinking: target.thinking,
+        writeMode,
+        managedWorktree: execution.managedWorktree,
+        baseSha: execution.baseSha,
+        taskPrompt: input.prompt,
       });
       return manager.begin(record, input.prompt, {
         model: target.model,
         thinking: target.thinking,
-        writeMode: input.writeMode,
+        writeMode,
+        usageThresholdPercent: input.usageThresholdPercent,
       });
     });
   }
@@ -216,6 +245,20 @@ export class LocalAgentManager {
     prompt: string,
     overrides: RunOverrides,
   ): BetterResult<LocalAgentRecord, AgentConflictError | AgentStoreError> {
+    if (
+      record.writeMode === "read_only"
+      && overrides.writeMode !== undefined
+      && overrides.writeMode !== "read_only"
+      && !record.managedWorktree
+    ) {
+      return Result.err(new AgentConflictError({
+        code: "AGENT_CONFLICT",
+        agentId: record.id,
+        operation: "continue",
+        retryable: false,
+        message: `Agent ${record.id} started read-only in the owner checkout and cannot be escalated to write access. Start a new isolated write-capable agent instead.`,
+      }));
+    }
     if (this.activeTurns.has(record.id)) {
       return Result.err(new AgentConflictError({
         code: "AGENT_CONFLICT",
@@ -230,6 +273,7 @@ export class LocalAgentManager {
       status: "running",
       model: overrides.model ?? record.model,
       thinking: overrides.thinking ?? record.thinking,
+      writeMode: overrides.writeMode ?? record.writeMode ?? "allowed",
       latestResponse: undefined,
       error: undefined,
       errorCode: undefined,
@@ -258,37 +302,45 @@ export class LocalAgentManager {
     try {
       const authorized = this.authorizeWorkspace(record.workspaceRoot, "run");
       if (authorized.isErr()) {
-        this.persistRunError(record, authorized.error, startedAt);
+        await this.persistRunError(record, authorized.error, startedAt);
         return;
       }
       const workspaceRoot = authorized.value;
-      const authorizedRecord = workspaceRoot === record.workspaceRoot
-        ? record
-        : { ...record, workspaceRoot };
+      const executionAuthorized = this.authorizeWorkspace(record.executionRoot ?? record.workspaceRoot, "run");
+      if (executionAuthorized.isErr()) {
+        await this.persistRunError(record, executionAuthorized.error, startedAt);
+        return;
+      }
+      const executionRoot = executionAuthorized.value;
+      const authorizedRecord = {
+        ...record,
+        workspaceRoot,
+        executionRoot,
+      };
       const profiles = await this.loadProfilesResult(workspaceRoot, record.profileName);
       if (profiles.isErr()) {
-        this.persistRunError(record, profiles.error, startedAt);
+        await this.persistRunError(record, profiles.error, startedAt);
         return;
       }
       const profile = this.profileForRecordResult(record, profiles.value);
       if (profile.isErr()) {
-        this.persistRunError(record, profile.error, startedAt);
+        await this.persistRunError(record, profile.error, startedAt);
         return;
       }
       const input = this.buildRunInputResult(authorizedRecord, profile.value, prompt, overrides);
       if (input.isErr()) {
-        this.persistRunError(record, input.error, startedAt);
+        await this.persistRunError(record, input.error, startedAt);
         return;
       }
       const driver = this.driverResult(record.provider, "run", record.id);
       if (driver.isErr()) {
-        this.persistRunError(record, driver.error, startedAt);
+        await this.persistRunError(record, driver.error, startedAt);
         return;
       }
       const context: LocalAgentRuntimeContext = {
         agentId: record.id,
         provider: driver.value.provider,
-        workspaceRoot,
+        workspaceRoot: executionRoot,
         providerSessionId: record.providerSessionId,
         writeMode: input.value.writeMode,
         model: input.value.model,
@@ -306,7 +358,7 @@ export class LocalAgentManager {
       };
       const result = await this.pool.run(driver.value, context, input.value, callbacks);
       if (result.isErr()) {
-        this.persistRunError(record, result.error, startedAt);
+        await this.persistRunError(record, result.error, startedAt);
         return;
       }
       const runResult = result.value;
@@ -315,22 +367,28 @@ export class LocalAgentManager {
       if (!current.value) return;
       const updated = this.store.updateResult(record.id, {
         providerSessionId: runResult.providerSessionId ?? current.value.providerSessionId,
-        status: "idle",
         latestResponse: runResult.finalResponse,
         error: undefined,
         errorCode: undefined,
         errorRetryable: undefined,
+        handoffReason: undefined,
+        providerUsage: runResult.providerUsage,
       });
       if (updated.isErr()) throw updated.error;
+      await this.refreshTaskSnapshot(updated.value.id, runResult.items, runResult.providerUsage);
+      this.activeTurns.delete(record.id);
+      const completed = this.store.updateResult(updated.value.id, { status: "idle" });
+      if (completed.isErr()) throw completed.error;
+      const finalRecord = completed.value;
       this.log("info", "agent_run_completed", {
-        provider: updated.value.provider,
-        agentId: updated.value.id,
-        providerSessionIdPrefix: updated.value.providerSessionId?.slice(0, 8),
+        provider: finalRecord.provider,
+        agentId: finalRecord.id,
+        providerSessionIdPrefix: finalRecord.providerSessionId?.slice(0, 8),
         durationMs: Math.max(0, Date.now() - startedAt),
       });
     } catch (error) {
       if (isLocalAgentError(error)) {
-        this.persistRunError(record, error, startedAt);
+        await this.persistRunError(record, error, startedAt);
         return;
       }
       const persisted = this.store.updateResult(record.id, {
@@ -354,16 +412,17 @@ export class LocalAgentManager {
     }
   }
 
-  private persistRunError(
+  private async persistRunError(
     record: LocalAgentRecord,
     error: LocalAgentError,
     startedAt: number,
-  ): void {
+  ): Promise<void> {
+    const handoffReason = handoffReasonForError(error);
     const persisted = this.store.updateResult(record.id, {
-      status: "error",
       error: error.message,
       errorCode: error.code,
       errorRetryable: error.retryable,
+      handoffReason,
     });
     this.log("error", "agent_run_failed", {
       provider: record.provider,
@@ -375,6 +434,128 @@ export class LocalAgentManager {
       causeType: safeCauseType("cause" in error ? error.cause : undefined),
       persistenceFailed: persisted.isErr(),
     });
+    if (!persisted.isErr()) {
+      const cause = "cause" in error ? error.cause : undefined;
+      await this.refreshTaskSnapshot(record.id, cause, providerUsageFromCause(cause), handoffReason);
+      this.activeTurns.delete(record.id);
+      this.store.updateResult(record.id, { status: "error" });
+    }
+  }
+
+  private async executionWorkspaceResult(
+    workspaceRoot: string,
+    provider: LocalAgentProvider,
+    writeMode: LocalAgentWriteMode,
+    isolation: LocalAgentIsolationMode,
+  ): Promise<BetterResult<{ executionRoot: string; managedWorktree: boolean; baseSha?: string }, AgentIsolationError>> {
+    const autoIsolate = isolation === "auto" && provider === "codex" && writeMode !== "read_only";
+    const mustIsolate = isolation === "worktree" && writeMode !== "read_only";
+    if (!autoIsolate && !mustIsolate) {
+      return Result.ok({ executionRoot: workspaceRoot, managedWorktree: false });
+    }
+    if (!this.createWorktree) {
+      if (mustIsolate) {
+        return Result.err(new AgentIsolationError({
+          code: "WORKTREE_CREATE_FAILED",
+          workspaceRoot,
+          operation: "start",
+          retryable: false,
+          message: "This DevSpace runtime cannot create an isolated subagent worktree.",
+        }));
+      }
+      return Result.ok({ executionRoot: workspaceRoot, managedWorktree: false });
+    }
+    try {
+      const worktree = await this.createWorktree(workspaceRoot);
+      return Result.ok({
+        executionRoot: resolve(worktree.path),
+        managedWorktree: true,
+        baseSha: worktree.baseSha,
+      });
+    } catch (cause) {
+      const code = gitWorktreeCauseCode(cause);
+      return Result.err(new AgentIsolationError({
+        code: code === "GIT_SOURCE_DIRTY" ? "WORKTREE_SOURCE_DIRTY" : "WORKTREE_CREATE_FAILED",
+        workspaceRoot,
+        operation: "start",
+        retryable: false,
+        cause,
+        message: code === "GIT_SOURCE_DIRTY"
+          ? "The source workspace has uncommitted changes, so DevSpace kept this write task with the host instead of starting Codex from a stale HEAD."
+          : `Unable to create an isolated subagent worktree: ${errorMessage(cause)}`,
+      }));
+    }
+  }
+
+  private async refreshTaskSnapshot(
+    agentId: string,
+    items?: unknown,
+    providerUsage?: LocalAgentProviderUsage,
+    handoffReason?: string,
+  ): Promise<void> {
+    const currentResult = this.store.getByIdResult(agentId);
+    if (currentResult.isErr() || !currentResult.value) return;
+    const current = currentResult.value;
+    const snapshot = await inspectLocalAgentWorkspace(current.executionRoot ?? current.workspaceRoot);
+    const commands = Array.from(new Set([
+      ...(current.commandsRun ?? []),
+      ...extractAgentCommands(items),
+    ])).slice(-64);
+    const updated = this.store.updateResult(agentId, {
+      changedFiles: snapshot.changedFiles,
+      commandsRun: commands,
+      ...(providerUsage ? { providerUsage } : {}),
+      ...(handoffReason ? { handoffReason } : {}),
+    });
+    if (updated.isErr()) return;
+    await this.recomputeConflictState({
+      workspaceId: current.workspaceId ?? "",
+      workspaceRoot: current.workspaceRoot,
+    });
+  }
+
+  private async recomputeConflictState(scope: LocalAgentWorkspaceScope): Promise<void> {
+    if (!scope.workspaceId) return;
+    const listed = this.store.listResult(scope);
+    if (listed.isErr()) return;
+    const records = listed.value.filter((record) => record.managedWorktree && (record.changedFiles?.length ?? 0) > 0);
+    const conflicts = new Map<string, Set<string>>();
+    const ownerSnapshot = await inspectLocalAgentWorkspace(scope.workspaceRoot);
+    for (const record of records) {
+      const ownerOverlap = overlappingChangedFiles(record.changedFiles, ownerSnapshot.changedFiles);
+      if (ownerOverlap.length === 0) continue;
+      const set = conflicts.get(record.id) ?? new Set<string>();
+      for (const path of ownerOverlap) set.add(path);
+      conflicts.set(record.id, set);
+    }
+    for (let leftIndex = 0; leftIndex < records.length; leftIndex += 1) {
+      const left = records[leftIndex];
+      if (!left) continue;
+      for (let rightIndex = leftIndex + 1; rightIndex < records.length; rightIndex += 1) {
+        const right = records[rightIndex];
+        if (!right) continue;
+        const overlap = overlappingChangedFiles(left.changedFiles, right.changedFiles);
+        if (overlap.length === 0) continue;
+        const leftSet = conflicts.get(left.id) ?? new Set<string>();
+        const rightSet = conflicts.get(right.id) ?? new Set<string>();
+        for (const path of overlap) {
+          leftSet.add(path);
+          rightSet.add(path);
+        }
+        conflicts.set(left.id, leftSet);
+        conflicts.set(right.id, rightSet);
+      }
+    }
+    for (const record of records) {
+      const files = Array.from(conflicts.get(record.id) ?? []).sort((a, b) => a.localeCompare(b));
+      const nextHandoffReason = files.length > 0
+        ? (record.handoffReason ?? "file_conflict")
+        : (record.handoffReason === "file_conflict" ? undefined : record.handoffReason);
+      this.store.updateResult(record.id, {
+        conflictFiles: files,
+        handoffReason: nextHandoffReason,
+      });
+    }
   }
 
   private buildRunInputResult(
@@ -397,13 +578,14 @@ export class LocalAgentManager {
     const fullPrompt = body ? `${body}\n\nTask:\n${prompt}` : prompt;
     return Result.ok({
       prompt: fullPrompt,
-      workspaceRoot: record.workspaceRoot,
+      workspaceRoot: record.executionRoot ?? record.workspaceRoot,
       providerSessionId: record.providerSessionId,
-      writeMode: overrides.writeMode ?? "allowed",
+      writeMode: overrides.writeMode ?? record.writeMode ?? profile?.writeMode ?? "allowed",
       model: record.model ?? profile?.model,
       thinking: record.thinking ?? profile?.thinking,
       modelOverrideRequested: overrides.model !== undefined,
       thinkingOverrideRequested: overrides.thinking !== undefined,
+      usageThresholdPercent: overrides.usageThresholdPercent ?? (record.provider === "codex" ? 90 : undefined),
     });
   }
 
@@ -548,6 +730,37 @@ export function createLocalAgentManager(options: LocalAgentManagerOptions): Loca
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function gitWorktreeCauseCode(cause: unknown): string | undefined {
+  if (!cause || typeof cause !== "object" || !("code" in cause)) return undefined;
+  const code = (cause as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function handoffReasonForError(error: LocalAgentError): string | undefined {
+  if (error.code === "PROVIDER_USAGE_LIMIT") return "usage_limit";
+  if (
+    error.code === "PROVIDER_EXECUTION_ERROR"
+    || error.code === "PROVIDER_PROTOCOL_ERROR"
+    || error.code === "PROVIDER_UNAVAILABLE"
+  ) {
+    return "provider_failure";
+  }
+  return undefined;
+}
+
+function providerUsageFromCause(cause: unknown): LocalAgentProviderUsage | undefined {
+  if (!cause || typeof cause !== "object") return undefined;
+  const direct = (cause as { providerUsage?: unknown }).providerUsage;
+  if (!direct || typeof direct !== "object" || Array.isArray(direct)) return undefined;
+  const record = direct as Record<string, unknown>;
+  return {
+    usedPercent: typeof record.usedPercent === "number" ? record.usedPercent : undefined,
+    remainingPercent: typeof record.remainingPercent === "number" ? record.remainingPercent : undefined,
+    resetsAt: typeof record.resetsAt === "number" ? record.resetsAt : undefined,
+    source: typeof record.source === "string" ? record.source : undefined,
+  };
 }
 
 function safeCauseType(cause: unknown): string | undefined {

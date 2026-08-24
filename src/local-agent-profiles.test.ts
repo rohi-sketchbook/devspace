@@ -36,6 +36,8 @@ try {
       "provider: claude",
       "model: sonnet",
       "thinking: high",
+      "writeMode: read_only",
+      "isolation: checkout",
       "---",
       "",
       "Project body.",
@@ -71,6 +73,8 @@ try {
   assert.equal(profiles[0]?.provider, "claude");
   assert.equal(profiles[0]?.model, "sonnet");
   assert.equal(profiles[0]?.thinking, "high");
+  assert.equal(profiles[0]?.writeMode, "read_only");
+  assert.equal(profiles[0]?.isolation, "checkout");
   assert.equal(profiles[0]?.body, "Project body.");
   assert.deepEqual(summarizeLocalAgentProfile(profiles[0]!), {
     name: "reviewer",
@@ -78,6 +82,8 @@ try {
     provider: "claude",
     model: "sonnet",
     thinking: "high",
+    writeMode: "read_only",
+    isolation: "checkout",
   });
 
   await writeFile(

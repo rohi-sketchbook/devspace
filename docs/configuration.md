@@ -150,13 +150,17 @@ from:
 - project `.devspace/agents/*.md`
 
 `open_workspace` returns a compact catalog containing profile names,
-descriptions, providers, and optional models/thinking levels so the host model can choose an
-agent without reading provider-specific launch details. `devspace agents ls`
+descriptions, providers, optional models/thinking levels, write authority, and
+isolation policy so the host model can choose an agent without reading
+provider-specific launch details. `devspace agents ls`
 lists existing subagent sessions for the current workspace, scoped by the
 workspace environment injected into shell commands. The `subagent-delegation`
-skill teaches the model to use only the minimal `devspace agents ls`,
-`devspace agents run`, `devspace agents continue`, and `devspace agents show`
-workflow.
+skill teaches the model the bounded `devspace agents ls`, `devspace agents run`,
+`devspace agents continue`, `devspace agents show`, and `devspace agents handoff`
+workflow. Codex write runs default to isolated managed worktrees, while read-only
+runs may stay in the owner checkout. The CLI also accepts `--write-mode`,
+`--isolation`, and a Codex `--usage-threshold` percentage; the default Codex
+preflight threshold is 90% used when quota information is available.
 
 Starter profile templates are available under `examples/agents/`. Copy or adapt
 them into one of the active profile directories before use.

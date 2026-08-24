@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { Panic, Result, type Result as BetterResult } from "better-result";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { LocalAgentManager } from "./local-agent-manager.js";
@@ -301,6 +301,77 @@ assert.equal(runtimes.get(shuttingDown.id)?.closed, true);
 await closing;
 
 await manager.close();
+
+const isolatedRoot = join(root, "managed-worktree");
+await mkdir(isolatedRoot, { recursive: true });
+const isolatedStore = new LocalAgentStore(join(root, "isolated-state"));
+let worktreeAllocations = 0;
+const isolatedManager = new LocalAgentManager({
+  store: isolatedStore,
+  drivers: [driver],
+  pool: new LocalAgentRuntimePool(),
+  loadProfiles: async () => [profile],
+  allowedRoots: [root],
+  createWorktree: async () => {
+    worktreeAllocations += 1;
+    return { path: isolatedRoot, baseSha: "base123" };
+  },
+});
+const isolatedWrite = unwrap(await isolatedManager.start({
+  target: "codex",
+  prompt: "isolated write",
+  workspaceId: scope.workspaceId,
+  workspaceRoot: root,
+  writeMode: "allowed",
+  isolation: "auto",
+}));
+await waitFor(() => isolatedStore.get(isolatedWrite.id)?.status === "idle");
+const isolatedWriteRecord = isolatedStore.get(isolatedWrite.id)!;
+assert.equal(isolatedWriteRecord.managedWorktree, true);
+assert.equal(isolatedWriteRecord.executionRoot, isolatedRoot);
+assert.equal(isolatedWriteRecord.baseSha, "base123");
+assert.equal(runtimes.get(isolatedWrite.id)?.inputs[0]?.workspaceRoot, isolatedRoot);
+assert.equal(worktreeAllocations, 1);
+
+const readOnly = unwrap(await isolatedManager.start({
+  target: "codex",
+  prompt: "read only",
+  workspaceId: scope.workspaceId,
+  workspaceRoot: root,
+  writeMode: "read_only",
+  isolation: "auto",
+}));
+await waitFor(() => isolatedStore.get(readOnly.id)?.status === "idle");
+assert.equal(isolatedStore.get(readOnly.id)?.managedWorktree, false);
+assert.equal(worktreeAllocations, 1, "read-only Codex runs do not allocate a worktree");
+const escalation = await isolatedManager.continue(readOnly.id, "write now", { writeMode: "allowed" }, scope);
+assert.equal(escalation.isErr(), true);
+if (escalation.isErr()) assert.equal(escalation.error.code, "AGENT_CONFLICT");
+await isolatedManager.close();
+
+const dirtyStore = new LocalAgentStore(join(root, "dirty-state"));
+const dirtyManager = new LocalAgentManager({
+  store: dirtyStore,
+  drivers: [driver],
+  pool: new LocalAgentRuntimePool(),
+  loadProfiles: async () => [profile],
+  allowedRoots: [root],
+  createWorktree: async () => {
+    throw Object.assign(new Error("dirty"), { code: "GIT_SOURCE_DIRTY" });
+  },
+});
+const dirtyStart = await dirtyManager.start({
+  target: "codex",
+  prompt: "unsafe stale write",
+  workspaceId: scope.workspaceId,
+  workspaceRoot: root,
+  writeMode: "allowed",
+  isolation: "auto",
+});
+assert.equal(dirtyStart.isErr(), true);
+if (dirtyStart.isErr()) assert.equal(dirtyStart.error.code, "WORKTREE_SOURCE_DIRTY");
+await dirtyManager.close();
+
 await rm(root, { recursive: true, force: true });
 
 function getRecord(id: string) {

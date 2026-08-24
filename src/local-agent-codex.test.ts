@@ -6,6 +6,7 @@ import {
   CodexAppServerRuntime,
   CodexLocalAgentDriver,
   codexCommandEnvironment,
+  parseCodexProviderUsage,
   parseCodexVersion,
   resolveCodexCommand,
   sandboxFor,
@@ -30,6 +31,21 @@ assert.equal(parseCodexVersion("codex-cli 0.9.1"), "0.9.1");
 assert.equal(sandboxFor("read_only"), "read-only");
 assert.equal(sandboxFor("allowed"), "workspace-write");
 assert.equal(sandboxFor("full_access"), "danger-full-access");
+assert.deepEqual(parseCodexProviderUsage({
+  rateLimitsByLimitId: {
+    codex: {
+      limitId: "codex",
+      primary: { usedPercent: 35, resetsAt: 100 },
+      secondary: { usedPercent: 62, resetsAt: 200 },
+    },
+  },
+}), {
+  usedPercent: 62,
+  remainingPercent: 38,
+  resetsAt: 200,
+  source: "codex",
+});
+assert.equal(parseCodexProviderUsage({ rateLimits: {} }), undefined);
 assert.equal(
   codexCommandEnvironment({ CODEX_INTERNAL_ORIGINATOR_OVERRIDE: "test", PATH: "/tmp/bin" }).CODEX_INTERNAL_ORIGINATOR_OVERRIDE,
   undefined,
@@ -64,6 +80,11 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     output({ id: message.id, result: { userAgent: "fake" } });
     return;
   }
+  if (message.method === "account/rateLimits/read") {
+    const usedPercent = process.env.DEVSPACE_FAKE_CODEX_LIMIT === "1" ? 95 : 20;
+    output({ id: message.id, result: { rateLimitsByLimitId: { codex: { limitId: "codex", primary: { usedPercent, resetsAt: 123456 }, secondary: { usedPercent: 10, resetsAt: 654321 } } } } });
+    return;
+  }
   if (message.method === "thread/start" || message.method === "thread/resume") {
     output({ id: message.id, result: { thread: { id: message.params.threadId || "thread_new" } } });
     return;
@@ -79,6 +100,10 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     setImmediate(() => {
       if (message.params.input[0].text === "fail") {
         output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "failed", error: { message: "fake failure" } } } });
+        return;
+      }
+      if (message.params.input[0].text === "limit") {
+        output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "failed", error: { type: "usage_limit_reached", message: "You've hit your usage limit. Try again later." } } } });
         return;
       }
       if (message.params.input[0].text === "empty") {
@@ -119,6 +144,8 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     assert.equal(first.providerSessionId, "thread_new");
     assert.equal(callbackSessionId, "thread_new");
     assert.equal(first.finalResponse, "fake response 1");
+    assert.equal(first.providerUsage?.usedPercent, 20);
+    assert.equal(first.providerUsage?.remainingPercent, 80);
     assert.equal(resumed.providerSessionId, "thread_new");
     assert.equal(resumed.finalResponse, "fake response 2");
     const failed = await runtime.run({
@@ -131,6 +158,19 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       assert.equal(failed.error.code, "PROVIDER_EXECUTION_ERROR");
       assert.equal(failed.error.provider, "codex");
       assert.equal(failed.error.retryable, false);
+    }
+    const limited = await runtime.run({
+      prompt: "limit",
+      workspaceRoot: "/tmp/project",
+      providerSessionId: first.providerSessionId ?? undefined,
+    });
+    assert.equal(limited.isErr(), true);
+    if (limited.isErr()) {
+      assert.equal(limited.error.code, "PROVIDER_USAGE_LIMIT");
+      assert.equal(limited.error.provider, "codex");
+      assert.equal(limited.error.retryable, false);
+      assert.match(limited.error.message, /usage limit/i);
+      assert.equal(toAgentErrorPayload(limited.error).code, "PROVIDER_USAGE_LIMIT");
     }
     const protocolFailure = await runtime.run({
       prompt: "empty",
@@ -146,6 +186,26 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       assert.equal("cause" in toAgentErrorPayload(protocolFailure.error), false);
     }
     await runtime.releaseSession("thread_new");
+
+    const limitedRuntime = new CodexAppServerRuntime({
+      command,
+      env: { ...process.env, DEVSPACE_FAKE_CODEX_LIMIT: "1" },
+    });
+    try {
+      await limitedRuntime.initialize();
+      const preflightLimited = await limitedRuntime.run({
+        prompt: "should not start",
+        workspaceRoot: "/tmp/project",
+        usageThresholdPercent: 90,
+      });
+      assert.equal(preflightLimited.isErr(), true);
+      if (preflightLimited.isErr()) {
+        assert.equal(preflightLimited.error.code, "PROVIDER_USAGE_LIMIT");
+        assert.equal(preflightLimited.error.operation, "preflight_usage_check");
+      }
+    } finally {
+      await limitedRuntime.close();
+    }
   } finally {
     await runtime.close();
     await runtime.close();

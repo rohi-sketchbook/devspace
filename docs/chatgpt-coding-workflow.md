@@ -123,8 +123,9 @@ It also keeps compatibility with:
 When Subagents are enabled, DevSpace discovers agent profiles
 from `~/.devspace/agents/*.md` and project `.devspace/agents/*.md`.
 `open_workspace` exposes a compact catalog with profile names, descriptions,
-providers, and optional models/thinking levels so the model can choose a configured agent
-without seeing provider-specific launch details.
+providers, optional models/thinking levels, write authority, and isolation policy
+so the model can choose a configured agent without seeing provider-specific
+launch details.
 
 Example profiles are packaged under `examples/agents/` for users who want
 starter templates. Copy or adapt them into one of the active profile directories
@@ -142,11 +143,41 @@ Skill paths may be outside the workspace. DevSpace only permits reading:
 
 Set `DEVSPACE_SKILLS=0` to hide skills from workspace output. Set
 `DEVSPACE_SUBAGENTS=1` to expose the experimental subagent catalog and
-`subagent-delegation` skill. That skill teaches the minimal
-`devspace agents ls`, `devspace agents run`, `devspace agents continue`, and
-`devspace agents show`
-workflow. The catalog comes from `open_workspace`; `devspace agents ls` lists
-existing subagent sessions for that workspace.
+`subagent-delegation` skill. That skill teaches the bounded
+`devspace agents ls`, `devspace agents run`, `devspace agents continue`,
+`devspace agents show`, and `devspace agents handoff` workflow. The host keeps
+architecture, ambiguous requirements, integration, and final verification;
+focused Codex writes are isolated in managed worktrees while read-only discovery
+may stay in the owner checkout. The catalog comes from `open_workspace`;
+`devspace agents ls` lists existing subagent sessions for that workspace.
+
+When a worker finishes or fails, DevSpace records its execution workspace,
+changed files, bounded command history, quota snapshot, and conflicts. A quota
+limit, provider failure, or file overlap produces a host-handoff signal. The host
+should resume the existing execution workspace rather than starting the task
+over or creating another worktree.
+
+### Host reporting and external activity tracking
+
+In a direct ChatGPT conversation, host ownership is implicit. Ordinary host-only
+progress updates should not be prefixed with `担当: ChatGPT`. Report ownership
+explicitly when a subagent is started, when host and subagent work in parallel,
+or when ownership changes. If no subagent participated, the final response does
+not need a redundant owner label.
+
+DevSpace itself does not require an external activity UI. In Rohi's AgentTools
+deployment, the separately installed `work-activity` skill records one user task
+across host/subagent workers, AgentTools Control Center displays active work, and
+the Discord Bot sends only terminal task summaries. The deployment-level
+canonical document is:
+
+```text
+H:\codexapp\AgentTools\agenttools-mcp-gateway\docs\agent-work-orchestration.md
+```
+
+The bundled `subagent-delegation` skill keeps that Activity synchronized when the
+external `work-activity` skill is available; the core DevSpace agent daemon does
+not depend on AgentTools Activity reporting.
 
 ## Tool Names
 

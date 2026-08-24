@@ -7,6 +7,7 @@ import type {
   RunOverrides,
   StartLocalAgentInput,
 } from "./local-agent-manager.js";
+import type { LocalAgentIsolationMode } from "./local-agent-profiles.js";
 import type { LocalAgentWriteMode } from "./local-agent-runtime.js";
 import { LOCAL_AGENT_DAEMON_PROTOCOL_VERSION } from "./local-agent-daemon-lifecycle.js";
 
@@ -59,6 +60,7 @@ export interface LocalAgentDaemonErrorPayload {
   provider?: string;
   agentId?: string;
   workspaceId?: string;
+  workspaceRoot?: string;
   operation?: string;
   target?: string;
 }
@@ -166,6 +168,7 @@ export function decodeLocalAgentDaemonResponse(value: unknown): LocalAgentDaemon
         provider: optionalString(error?.provider),
         agentId: optionalString(error?.agentId),
         workspaceId: optionalString(error?.workspaceId),
+        workspaceRoot: optionalString(error?.workspaceRoot),
         operation: optionalString(error?.operation),
         target: optionalString(error?.target),
       },
@@ -182,16 +185,26 @@ export function decodeAgentRecord(value: unknown): LocalAgentRecord {
     id: requiredString(record?.id, "id"),
     workspaceId: requiredString(record?.workspaceId, "workspaceId"),
     workspaceRoot: requiredString(record?.workspaceRoot, "workspaceRoot"),
+    executionRoot: optionalString(record?.executionRoot) ?? requiredString(record?.workspaceRoot, "workspaceRoot"),
     profileName: requiredString(record?.profileName, "profileName"),
     provider: requiredString(record?.provider, "provider"),
     model: optionalString(record?.model),
     thinking: optionalString(record?.thinking),
+    writeMode: decodeWriteMode(record?.writeMode),
+    managedWorktree: optionalBoolean(record?.managedWorktree),
+    baseSha: optionalString(record?.baseSha),
+    taskPrompt: optionalContentString(record?.taskPrompt),
     providerSessionId: optionalString(record?.providerSessionId),
     status,
     latestResponse: optionalContentString(record?.latestResponse),
     error: optionalContentString(record?.error),
     errorCode: optionalString(record?.errorCode),
     errorRetryable: optionalBoolean(record?.errorRetryable),
+    changedFiles: optionalStringArray(record?.changedFiles),
+    commandsRun: optionalStringArray(record?.commandsRun),
+    conflictFiles: optionalStringArray(record?.conflictFiles),
+    handoffReason: optionalString(record?.handoffReason),
+    providerUsage: optionalRecord(record?.providerUsage),
     createdAt: requiredString(record?.createdAt, "createdAt"),
     updatedAt: requiredString(record?.updatedAt, "updatedAt"),
   };
@@ -251,6 +264,8 @@ function decodeStartInput(value: unknown): StartLocalAgentInput {
     model: optionalString(record?.model),
     thinking: optionalString(record?.thinking),
     writeMode: decodeWriteMode(record?.writeMode),
+    isolation: decodeIsolationMode(record?.isolation),
+    usageThresholdPercent: optionalPercent(record?.usageThresholdPercent),
   };
 }
 
@@ -265,6 +280,7 @@ function decodeContinueInput(value: unknown): { id: string; prompt: string; scop
       model: optionalString(overrides.model),
       thinking: optionalString(overrides.thinking),
       writeMode: decodeWriteMode(overrides.writeMode),
+      usageThresholdPercent: optionalPercent(overrides.usageThresholdPercent),
     } } : {}),
   };
 }
@@ -298,6 +314,20 @@ function decodeWriteMode(value: unknown): LocalAgentWriteMode | undefined {
   if (value === undefined) return undefined;
   if (value === "read_only" || value === "allowed" || value === "full_access") return value;
   throw new LocalAgentDaemonProtocolError("INVALID_PARAMS", "Invalid write mode.");
+}
+
+function decodeIsolationMode(value: unknown): LocalAgentIsolationMode | undefined {
+  if (value === undefined) return undefined;
+  if (value === "auto" || value === "worktree" || value === "checkout") return value;
+  throw new LocalAgentDaemonProtocolError("INVALID_PARAMS", "Invalid isolation mode.");
+}
+
+function optionalPercent(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
+    throw new LocalAgentDaemonProtocolError("INVALID_PARAMS", "Usage threshold must be between 0 and 100.");
+  }
+  return value;
 }
 
 function isLocalAgentStatus(value: string): value is LocalAgentStatus {
@@ -336,6 +366,15 @@ function optionalContentString(value: unknown): string | undefined {
 
 function optionalBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function optionalStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return asRecord(value);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

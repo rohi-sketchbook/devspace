@@ -73,6 +73,26 @@ assert.throws(
   /Missing value for --thinking/,
 );
 
+assert.deepEqual(parseLocalAgentRunArgs([
+  "codex",
+  "--model", "gpt-5.6-terra",
+  "--write-mode", "allowed",
+  "--isolation", "auto",
+  "--usage-threshold", "85",
+  "implement",
+]), {
+  target: "codex",
+  prompt: "implement",
+  model: "gpt-5.6-terra",
+  thinking: undefined,
+  writeMode: "allowed",
+  isolation: "auto",
+  usageThresholdPercent: 85,
+});
+assert.throws(() => parseLocalAgentRunArgs(["codex", "--write-mode", "unsafe", "x"]), /--write-mode/);
+assert.throws(() => parseLocalAgentRunArgs(["codex", "--isolation", "magic", "x"]), /--isolation/);
+assert.throws(() => parseLocalAgentRunArgs(["codex", "--usage-threshold", "101", "x"]), /--usage-threshold/);
+
 {
   const target = resolveLocalAgentTarget("reviewer", profiles);
   assert.equal(target?.kind, "profile");

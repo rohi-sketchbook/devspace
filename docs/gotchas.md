@@ -224,12 +224,24 @@ When `DEVSPACE_SUBAGENTS=1`, DevSpace loads agent profiles from
 `~/.devspace/agents/*.md` and project `.devspace/agents/*.md`, then exposes a
 compact profile catalog through `open_workspace`. The bundled
 `subagent-delegation` skill keeps the model-facing workflow to
-`devspace agents ls`, `devspace agents run`, `devspace agents continue`, and
-`devspace agents show`.
+`devspace agents ls`, `devspace agents run`, `devspace agents continue`,
+`devspace agents show`, and `devspace agents handoff`.
 Those commands automatically manage the internal local agent daemon; `devspace
 serve` is not a prerequisite.
 `devspace agents ls` lists existing subagent sessions, not profile
 definitions.
+
+Write-capable Codex delegation normally creates a managed worktree. If the owner
+checkout is dirty, DevSpace returns `WORKTREE_SOURCE_DIRTY` rather than starting
+the worker from a stale committed HEAD. Do not work around this by forcing the
+worker into the owner checkout. Either keep that task with the host or establish
+a clean committed base first.
+
+A completed worker can still require host intervention. `agents show` and
+`agents handoff` expose `usage_limit`, `provider_failure`, and `file_conflict`
+handoff reasons. File conflicts include overlap with both the owner checkout and
+other managed workers; inspect the existing execution workspace before any
+integration.
 
 Packaged agent profile examples under `examples/agents/` are starter templates.
 Copy or adapt them into one of the active profile directories before use.

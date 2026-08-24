@@ -15,12 +15,17 @@ export const LOCAL_AGENT_PROVIDERS: readonly LocalAgentProvider[] = [
   "copilot",
 ];
 
+export type LocalAgentWriteMode = "read_only" | "allowed" | "full_access";
+export type LocalAgentIsolationMode = "auto" | "worktree" | "checkout";
+
 export interface LocalAgentProfile {
   name: string;
   description: string;
   provider: LocalAgentProvider;
   model?: string;
   thinking?: string;
+  writeMode?: LocalAgentWriteMode;
+  isolation?: LocalAgentIsolationMode;
   filePath: string;
   body: string;
   disabled: boolean;
@@ -32,6 +37,8 @@ export interface LocalAgentProfileSummary {
   provider: LocalAgentProvider;
   model?: string;
   thinking?: string;
+  writeMode?: LocalAgentWriteMode;
+  isolation?: LocalAgentIsolationMode;
 }
 
 interface ParsedFrontmatter {
@@ -75,6 +82,8 @@ export function summarizeLocalAgentProfile(
     provider: profile.provider,
     model: profile.model,
     thinking: profile.thinking,
+    ...(profile.writeMode ? { writeMode: profile.writeMode } : {}),
+    ...(profile.isolation ? { isolation: profile.isolation } : {}),
   };
 }
 
@@ -159,6 +168,8 @@ function profileFromFrontmatter(
     provider,
     model: readString(frontmatter, "model"),
     thinking: readString(frontmatter, "thinking"),
+    writeMode: readWriteMode(frontmatter, filePath),
+    isolation: readIsolationMode(frontmatter, filePath),
     filePath,
     body,
     disabled: frontmatter.disabled === true,
@@ -180,6 +191,20 @@ function readProvider(frontmatter: Record<string, unknown>, filePath: string): L
 
 export function isLocalAgentProvider(value: string): value is LocalAgentProvider {
   return PROVIDERS.has(value as LocalAgentProvider);
+}
+
+function readWriteMode(frontmatter: Record<string, unknown>, filePath: string): LocalAgentWriteMode | undefined {
+  const value = readString(frontmatter, "writeMode");
+  if (value === undefined) return undefined;
+  if (value === "read_only" || value === "allowed" || value === "full_access") return value;
+  throw new Error(`Subagent profile writeMode must be read_only, allowed, or full_access: ${filePath}`);
+}
+
+function readIsolationMode(frontmatter: Record<string, unknown>, filePath: string): LocalAgentIsolationMode | undefined {
+  const value = readString(frontmatter, "isolation");
+  if (value === undefined) return undefined;
+  if (value === "auto" || value === "worktree" || value === "checkout") return value;
+  throw new Error(`Subagent profile isolation must be auto, worktree, or checkout: ${filePath}`);
 }
 
 function readString(frontmatter: Record<string, unknown>, key: string): string | undefined {

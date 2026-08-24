@@ -15,6 +15,7 @@ export class GitWorktreeError extends Error {
       | "GIT_REPOSITORY_NOT_FOUND"
       | "GIT_REPOSITORY_HAS_NO_COMMITS"
       | "GIT_INVALID_BASE_REF"
+      | "GIT_SOURCE_DIRTY"
       | "GIT_WORKTREE_CREATE_FAILED",
     message: string,
   ) {
@@ -37,6 +38,7 @@ export async function createManagedWorktree(input: {
   sourcePath: string;
   baseRef?: string;
   config: ServerConfig;
+  requireCleanSource?: boolean;
 }): Promise<ManagedWorktree> {
   const sourcePath = assertAllowedPath(input.sourcePath, input.config.allowedRoots);
 
@@ -60,6 +62,12 @@ export async function createManagedWorktree(input: {
   const baseRef = input.baseRef ?? "HEAD";
   const baseSha = await resolveBaseCommit(sourceRoot, baseRef);
   const dirtySource = (await git(["status", "--porcelain=v1"], sourceRoot)).trim().length > 0;
+  if (dirtySource && input.requireCleanSource) {
+    throw new GitWorktreeError(
+      "GIT_SOURCE_DIRTY",
+      "Cannot create an isolated subagent worktree from a dirty checkout because uncommitted changes would not be included. Commit or stash the source changes, or keep this task with the host.",
+    );
+  }
   const worktreePath = managedWorktreePath({
     worktreeRoot: input.config.worktreeRoot,
     repoRoot: sourceRoot,

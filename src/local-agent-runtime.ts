@@ -1,8 +1,8 @@
 import type { Result } from "better-result";
 import type { AgentProviderError } from "./local-agent-errors.js";
-import type { LocalAgentProvider } from "./local-agent-profiles.js";
+import type { LocalAgentProvider, LocalAgentWriteMode } from "./local-agent-profiles.js";
 
-export type LocalAgentWriteMode = "read_only" | "allowed" | "full_access";
+export type { LocalAgentWriteMode } from "./local-agent-profiles.js";
 
 export interface LocalAgentRunInput {
   prompt: string;
@@ -13,6 +13,14 @@ export interface LocalAgentRunInput {
   thinking?: string;
   modelOverrideRequested?: boolean;
   thinkingOverrideRequested?: boolean;
+  usageThresholdPercent?: number;
+}
+
+export interface LocalAgentProviderUsage {
+  usedPercent?: number;
+  remainingPercent?: number;
+  resetsAt?: number;
+  source?: string;
 }
 
 export interface LocalAgentRunResult {
@@ -20,6 +28,7 @@ export interface LocalAgentRunResult {
   providerSessionId: string | null;
   finalResponse: string;
   items: unknown[];
+  providerUsage?: LocalAgentProviderUsage;
 }
 
 export interface LocalAgentRunCallbacks {
