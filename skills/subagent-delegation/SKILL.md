@@ -213,13 +213,47 @@ Rules:
 - Separate facts from guesses.
 ```
 
+## Independent review policy
+
+When a write-capable Codex implementation changes code, do not use that same
+Codex session as the reviewer. First inspect the persistent AgentTools review
+policy:
+
+```bash
+node H:/codexapp/AgentTools/agenttools-mcp-gateway/src/cli.js workflow review
+```
+
+Treat the returned `requiresIndependentCodex` and `reviewer` fields as the machine-readable routing decision; do not infer a different reviewer when they are present. The supported modes are:
+
+- `codex`: after the implementation worker hands work back, start a fresh
+  read-only Codex Luna session in the execution workspace and ask it to review
+  the diff, acceptance criteria, regression risk, and test gaps. The reviewer
+  must not edit files. Treat its findings as advisory; the host owns fixes,
+  integration, and final verification.
+- `chatgpt`: skip the extra Codex reviewer and perform the review with the host,
+  preserving the pre-reviewer workflow and reducing Codex token usage.
+
+If the policy command is unavailable or malformed, fall back to host review.
+If Codex reviewer startup is refused by the quota guard or provider failure,
+fall back to host review instead of retrying repeatedly.
+
+Use a distinct Task worker identity such as `codex-reviewer` / `Codex Reviewer`
+for the independent review phase so Control Center can distinguish implementation
+from review. Mark the implementation worker done before review unless it is still
+performing independent work in parallel.
+
+A reviewer prompt should be adversarial and bounded: assume the implementation
+may be wrong, inspect the actual diff, cite files/symbols, identify concrete bugs
+or regression risks, and call out missing tests. Do not ask the reviewer to
+rewrite the implementation.
+
 ## After the worker responds
 
 Always review the result before presenting it as verified.
 
 For write-capable tasks, inspect changed files and run or explain relevant
-tests. For read-only tasks, verify that important claims are supported by repo
-evidence.
+tests. Apply the independent review policy above when Codex wrote code. For
+read-only tasks, verify that important claims are supported by repo evidence.
 
 Be transparent in the final response:
 
