@@ -537,9 +537,13 @@ function threadParams(input: LocalAgentRunInput): Record<string, unknown> {
 }
 
 function turnParams(input: LocalAgentRunInput, threadId: string): Record<string, unknown> {
+  const turnInput: Array<Record<string, unknown>> = [{ type: "text", text: input.prompt }];
+  for (const imagePath of input.imagePaths ?? []) {
+    turnInput.push({ type: "localImage", path: imagePath });
+  }
   return {
     threadId,
-    input: [{ type: "text", text: input.prompt }],
+    input: turnInput,
     approvalPolicy: "never",
     sandboxPolicy: sandboxPolicyFor(input.writeMode),
     ...(input.model ? { model: input.model } : {}),

@@ -396,6 +396,7 @@ async function runAgentsRun(args: string[], json: boolean): Promise<void> {
     writeMode: parsed.writeMode,
     isolation: parsed.isolation,
     usageThresholdPercent: parsed.usageThresholdPercent,
+    imagePaths: parsed.imagePaths,
   });
   const record = presentAgentResult(result, json);
   if (!record) return;
@@ -416,6 +417,7 @@ async function runAgentsContinue(args: string[], json: boolean): Promise<void> {
     thinking: parsed.thinking,
     writeMode: parsed.writeMode,
     usageThresholdPercent: parsed.usageThresholdPercent,
+    imagePaths: parsed.imagePaths,
   }, scope);
   const record = presentAgentResult(result, json);
   if (!record) return;
@@ -616,8 +618,8 @@ function printAgentsHelp(): void {
       "",
       "Usage:",
       "  devspace agents ls [--json]",
-      "  devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--isolation <mode>] [--usage-threshold <percent>] [--json] <prompt>",
-      "  devspace agents continue <id> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--usage-threshold <percent>] [--json] <prompt>",
+      "  devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--isolation <mode>] [--usage-threshold <percent>] [--image <path>] [--json] <prompt>",
+      "  devspace agents continue <id> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--usage-threshold <percent>] [--image <path>] [--json] <prompt>",
       "  devspace agents running [--json]",
       "  devspace agents steer <id> [--json] <prompt>",
       "  devspace agents stop <id> [--json]",

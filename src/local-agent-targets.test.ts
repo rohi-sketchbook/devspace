@@ -92,6 +92,19 @@ assert.deepEqual(parseLocalAgentRunArgs([
 assert.throws(() => parseLocalAgentRunArgs(["codex", "--write-mode", "unsafe", "x"]), /--write-mode/);
 assert.throws(() => parseLocalAgentRunArgs(["codex", "--isolation", "magic", "x"]), /--isolation/);
 assert.throws(() => parseLocalAgentRunArgs(["codex", "--usage-threshold", "101", "x"]), /--usage-threshold/);
+assert.deepEqual(parseLocalAgentRunArgs([
+  "codex",
+  "--image", "Screenshots/menu.png",
+  "--image=Screenshots/settings.png",
+  "inspect UI",
+]), {
+  target: "codex",
+  prompt: "inspect UI",
+  model: undefined,
+  thinking: undefined,
+  imagePaths: ["Screenshots/menu.png", "Screenshots/settings.png"],
+});
+assert.throws(() => parseLocalAgentRunArgs(["codex", "--image"]), /Missing value for --image/);
 
 {
   const target = resolveLocalAgentTarget("reviewer", profiles);

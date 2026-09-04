@@ -15,6 +15,7 @@ export interface ParsedLocalAgentRunArgs {
   writeMode?: LocalAgentWriteMode;
   isolation?: LocalAgentIsolationMode;
   usageThresholdPercent?: number;
+  imagePaths?: string[];
 }
 
 export interface ParsedLocalAgentContinueArgs {
@@ -24,6 +25,7 @@ export interface ParsedLocalAgentContinueArgs {
   thinking?: string;
   writeMode?: LocalAgentWriteMode;
   usageThresholdPercent?: number;
+  imagePaths?: string[];
 }
 
 export type LocalAgentTarget =
@@ -46,14 +48,14 @@ export type LocalAgentTarget =
 export function parseLocalAgentRunArgs(args: string[]): ParsedLocalAgentRunArgs {
   return parseAgentPromptArgs(
     args,
-    'Usage: devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--isolation <mode>] [--usage-threshold <percent>] "<prompt>"',
+    'Usage: devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--isolation <mode>] [--usage-threshold <percent>] [--image <path>] "<prompt>"',
   );
 }
 
 export function parseLocalAgentContinueArgs(args: string[]): ParsedLocalAgentContinueArgs {
   const parsed = parseAgentPromptArgs(
     args,
-    'Usage: devspace agents continue <id> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--usage-threshold <percent>] "<prompt>"',
+    'Usage: devspace agents continue <id> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--usage-threshold <percent>] [--image <path>] "<prompt>"',
   );
   return {
     agentId: parsed.target,
@@ -62,6 +64,7 @@ export function parseLocalAgentContinueArgs(args: string[]): ParsedLocalAgentCon
     thinking: parsed.thinking,
     ...(parsed.writeMode ? { writeMode: parsed.writeMode } : {}),
     ...(parsed.usageThresholdPercent !== undefined ? { usageThresholdPercent: parsed.usageThresholdPercent } : {}),
+    ...(parsed.imagePaths?.length ? { imagePaths: parsed.imagePaths } : {}),
   };
 }
 
@@ -77,17 +80,31 @@ function parseAgentPromptArgs(
   let writeMode: LocalAgentWriteMode | undefined;
   let isolation: LocalAgentIsolationMode | undefined;
   let usageThresholdPercent: number | undefined;
+  const imagePaths: string[] = [];
   const promptParts: string[] = [];
 
   for (let index = 0; index < rest.length; index += 1) {
     const part = rest[index];
+    if (part === "--image") {
+      const value = rest[index + 1]?.trim();
+      if (!value) throw new Error("Missing value for --image.");
+      imagePaths.push(value);
+      index += 1;
+      continue;
+    }
+    if (part?.startsWith("--image=")) {
+      const value = part.slice("--image=".length).trim();
+      if (!value) throw new Error("Missing value for --image.");
+      imagePaths.push(value);
+      continue;
+    }
     if (part === "--model" || part === "--thinking" || part === "--write-mode" || part === "--isolation" || part === "--usage-threshold") {
       const value = rest[index + 1]?.trim();
       if (!value) throw new Error(`Missing value for ${part}.`);
       ({ model, thinking, writeMode, isolation, usageThresholdPercent } = applyOption(
         part,
         value,
-        { model, thinking, writeMode, isolation, usageThresholdPercent },
+        { model, thinking, writeMode, isolation, usageThresholdPercent, imagePaths },
       ));
       index += 1;
       continue;
@@ -100,7 +117,7 @@ function parseAgentPromptArgs(
       ({ model, thinking, writeMode, isolation, usageThresholdPercent } = applyOption(
         option.slice(0, -1),
         value,
-        { model, thinking, writeMode, isolation, usageThresholdPercent },
+        { model, thinking, writeMode, isolation, usageThresholdPercent, imagePaths },
       ));
       continue;
     }
@@ -118,6 +135,7 @@ function parseAgentPromptArgs(
     ...(writeMode ? { writeMode } : {}),
     ...(isolation ? { isolation } : {}),
     ...(usageThresholdPercent !== undefined ? { usageThresholdPercent } : {}),
+    ...(imagePaths.length ? { imagePaths } : {}),
   };
 }
 

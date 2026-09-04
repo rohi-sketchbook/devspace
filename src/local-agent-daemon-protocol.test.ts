@@ -19,12 +19,30 @@ const request = decodeLocalAgentDaemonRequest({
     workspaceId: "ws_test",
     workspaceRoot: "/tmp/project",
     writeMode: "read_only",
+    imagePaths: ["/tmp/project/screenshot.png"],
   },
 });
 assert.equal(request.method, "agent.start");
 if (request.method !== "agent.start") throw new Error("expected agent.start request");
 assert.equal(request.params.writeMode, "read_only");
+assert.deepEqual(request.params.imagePaths, ["/tmp/project/screenshot.png"]);
 assert.match(encodeLocalAgentDaemonRequest(request), /"method":"agent.start"/);
+
+const continueRequest = decodeLocalAgentDaemonRequest({
+  requestId: "req_continue",
+  protocolVersion: 3,
+  authToken: "test-secret",
+  method: "agent.continue",
+  params: {
+    id: "agt_1234",
+    prompt: "inspect another image",
+    scope: { workspaceId: "ws_test", workspaceRoot: "/tmp/project" },
+    overrides: { imagePaths: ["/tmp/project/second.png"] },
+  },
+});
+assert.equal(continueRequest.method, "agent.continue");
+if (continueRequest.method !== "agent.continue") throw new Error("expected agent.continue request");
+assert.deepEqual(continueRequest.params.overrides?.imagePaths, ["/tmp/project/second.png"]);
 
 const whitespaceRequest = decodeLocalAgentDaemonRequest({
   requestId: "req_whitespace",

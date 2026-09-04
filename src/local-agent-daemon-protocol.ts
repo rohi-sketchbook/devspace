@@ -297,6 +297,7 @@ function decodeStartInput(value: unknown): StartLocalAgentInput {
     writeMode: decodeWriteMode(record?.writeMode),
     isolation: decodeIsolationMode(record?.isolation),
     usageThresholdPercent: optionalPercent(record?.usageThresholdPercent),
+    imagePaths: optionalStringArray(record?.imagePaths),
   };
 }
 
@@ -312,6 +313,7 @@ function decodeContinueInput(value: unknown): { id: string; prompt: string; scop
       thinking: optionalString(overrides.thinking),
       writeMode: decodeWriteMode(overrides.writeMode),
       usageThresholdPercent: optionalPercent(overrides.usageThresholdPercent),
+      imagePaths: optionalStringArray(overrides.imagePaths),
     } } : {}),
   };
 }

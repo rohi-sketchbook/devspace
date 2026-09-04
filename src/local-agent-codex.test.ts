@@ -121,6 +121,12 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
         output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "completed", items: [], itemsView: "notLoaded" } } });
         return;
       }
+      if (message.params.input[0].text === "image-test") {
+        const image = message.params.input[1];
+        const imageItem = { type: "agentMessage", text: image?.type === "localImage" && image?.path === "/tmp/project/ui.png" ? "image accepted" : "image missing" };
+        output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "completed", items: [imageItem] } } });
+        return;
+      }
       output({ method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: turnId, status: "completed", items: [item] } } });
     });
   }
@@ -165,6 +171,15 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     assert.equal(streamedResult.isOk(), true);
     if (streamedResult.isErr()) throw streamedResult.error;
     assert.equal(streamedResult.value.finalResponse, "fake response 3");
+    const imageResult = await runtime.run({
+      prompt: "image-test",
+      workspaceRoot: "/tmp/project",
+      providerSessionId: first.providerSessionId ?? undefined,
+      imagePaths: ["/tmp/project/ui.png"],
+    });
+    assert.equal(imageResult.isOk(), true);
+    if (imageResult.isErr()) throw imageResult.error;
+    assert.equal(imageResult.value.finalResponse, "image accepted");
     const failed = await runtime.run({
       prompt: "fail",
       workspaceRoot: "/tmp/project",

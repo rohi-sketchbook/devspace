@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import { Result, type Result as BetterResult } from "better-result";
 import {
   AgentConflictError,
@@ -46,6 +46,7 @@ export interface StartLocalAgentInput {
   writeMode?: LocalAgentWriteMode;
   isolation?: LocalAgentIsolationMode;
   usageThresholdPercent?: number;
+  imagePaths?: string[];
 }
 
 export interface RunOverrides {
@@ -53,6 +54,7 @@ export interface RunOverrides {
   thinking?: string;
   writeMode?: LocalAgentWriteMode;
   usageThresholdPercent?: number;
+  imagePaths?: string[];
 }
 
 export interface LocalAgentManagerLogger {
@@ -165,6 +167,7 @@ export class LocalAgentManager {
         thinking: target.thinking,
         writeMode,
         usageThresholdPercent: input.usageThresholdPercent,
+        imagePaths: input.imagePaths,
       });
     });
   }
@@ -760,7 +763,7 @@ export class LocalAgentManager {
     profile: LocalAgentProfile | undefined,
     prompt: string,
     overrides: RunOverrides,
-  ): BetterResult<LocalAgentRunInput, AgentTargetError> {
+  ): BetterResult<LocalAgentRunInput, AgentTargetError | AgentScopeError> {
     const isRawProvider = record.profileName === record.provider;
     if (!profile && !isRawProvider) {
       return Result.err(new AgentTargetError({
@@ -773,9 +776,21 @@ export class LocalAgentManager {
     }
     const body = profile?.body.trim();
     const fullPrompt = body ? `${body}\n\nTask:\n${prompt}` : prompt;
+    const executionRoot = record.executionRoot ?? record.workspaceRoot;
+    if (overrides.imagePaths?.length && record.provider !== "codex") {
+      return Result.err(new AgentTargetError({
+        code: "UNKNOWN_TARGET",
+        target: record.provider,
+        retryable: false,
+        message: "Local image attachments are currently supported by the Codex provider only.",
+      }));
+    }
+    const imagePaths = resolveImagePaths(executionRoot, overrides.imagePaths);
+    if (imagePaths.isErr()) return imagePaths;
     return Result.ok({
       prompt: fullPrompt,
-      workspaceRoot: record.executionRoot ?? record.workspaceRoot,
+      workspaceRoot: executionRoot,
+      ...(imagePaths.value.length ? { imagePaths: imagePaths.value } : {}),
       providerSessionId: record.providerSessionId,
       writeMode: overrides.writeMode ?? record.writeMode ?? profile?.writeMode ?? "allowed",
       model: record.model ?? profile?.model,
@@ -923,6 +938,45 @@ export class LocalAgentManager {
 
 export function createLocalAgentManager(options: LocalAgentManagerOptions): LocalAgentManager {
   return new LocalAgentManager(options);
+}
+
+function resolveImagePaths(
+  workspaceRoot: string,
+  imagePaths: readonly string[] | undefined,
+): BetterResult<string[], AgentScopeError> {
+  if (!imagePaths?.length) return Result.ok([]);
+  if (imagePaths.length > 16) {
+    return Result.err(new AgentScopeError({
+      code: "WORKSPACE_MISMATCH",
+      operation: "attach_image",
+      retryable: false,
+      message: "A subagent turn accepts at most 16 local images.",
+    }));
+  }
+  const root = resolve(workspaceRoot);
+  const resolvedPaths: string[] = [];
+  for (const rawPath of imagePaths) {
+    const candidate = resolve(root, String(rawPath));
+    const rel = relative(root, candidate);
+    if (rel === "" || rel === ".") {
+      return Result.err(new AgentScopeError({
+        code: "WORKSPACE_MISMATCH",
+        operation: "attach_image",
+        retryable: false,
+        message: "Image attachment must point to a file inside the execution workspace.",
+      }));
+    }
+    if (rel.startsWith("..") || isAbsolute(rel)) {
+      return Result.err(new AgentScopeError({
+        code: "WORKSPACE_MISMATCH",
+        operation: "attach_image",
+        retryable: false,
+        message: "Image attachment is outside the execution workspace.",
+      }));
+    }
+    resolvedPaths.push(candidate);
+  }
+  return Result.ok(resolvedPaths);
 }
 
 function mergeSteeringPrompt(current: string | undefined, next: string): string {

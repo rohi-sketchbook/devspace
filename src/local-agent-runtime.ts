@@ -7,6 +7,7 @@ export type { LocalAgentWriteMode } from "./local-agent-profiles.js";
 export interface LocalAgentRunInput {
   prompt: string;
   workspaceRoot: string;
+  imagePaths?: string[];
   providerSessionId?: string;
   writeMode?: LocalAgentWriteMode;
   model?: string;
