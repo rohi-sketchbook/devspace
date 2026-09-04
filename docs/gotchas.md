@@ -130,6 +130,17 @@ To regenerate setup:
 npx @waishnav/devspace init --force
 ```
 
+## ChatGPT Does Not Show a Newly Added Tool
+
+ChatGPT keeps an app/action catalog separately from the MCP server. A DevSpace
+restart updates the server process, but it does not necessarily refresh actions
+already registered or approved on the ChatGPT side.
+
+If a tool is present in DevSpace `tools/list` tests but missing in ChatGPT after
+a restart, refresh or reconfigure the app's action catalog in ChatGPT as required
+by that host/workspace. Do not hide destructive behavior behind another allowed
+tool as a workaround; keep deletion and cleanup in purpose-built guarded tools.
+
 ## Unknown `workspaceId`
 
 `workspaceId` values are session identifiers. If the server restarts and the

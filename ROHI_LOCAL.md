@@ -58,6 +58,8 @@ Use `read` for text and `read_image` when the host must visually inspect a local
 
 `delete_path` refuses the workspace root and symlink escapes. `git_cleanup` restricts worktree cleanup to the configured managed-worktree root and refuses unsafe residue targets.
 
+ChatGPT keeps its own app/action catalog. Adding, removing, or renaming an MCP tool on the DevSpace server does not guarantee that an already-connected ChatGPT app immediately exposes that action. After tool-surface changes, refresh/reconfigure the ChatGPT app action catalog as required by the host; restarting DevSpace alone is not sufficient. If a destructive tool is missing from the host, do not bypass the separation by falling back to `bash` deletion.
+
 ## Future upstream updates
 
 For future updates:

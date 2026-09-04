@@ -10,6 +10,9 @@ echo === DevSpace local Doctor ===
 echo Artifact download: ENABLED
 echo Subagents: ENABLED
 echo Windows artifact runtime: local koffi 3.1.2
+echo Rohi local MCP tools: read_image, delete_path, git_cleanup
+echo NOTE: After adding, removing, or renaming MCP tools, refresh the ChatGPT app action catalog.
+echo NOTE: Restarting DevSpace alone does not refresh ChatGPT-side action permissions.
 
 if not exist "dist\cli.js" (
   echo ERROR: dist\cli.js is missing. Run npm run build first.
