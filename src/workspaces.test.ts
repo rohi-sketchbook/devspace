@@ -68,6 +68,38 @@ test("a checkout exposes initial and nested instruction context while filtering 
   }
 });
 
+test("reading a skill records persistent bounded usage telemetry", async (t) => {
+  const context = await fixture(t);
+  const skillDir = join(context.root, ".agents", "skills", "telemetry-skill");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(join(skillDir, "SKILL.md"), [
+    "---",
+    "name: telemetry-skill",
+    "description: Test skill telemetry.",
+    "---",
+    "",
+    "# Telemetry Skill",
+  ].join("\n"));
+  const store = new SqliteWorkspaceStore(join(context.root, ".skill-state"));
+  try {
+    const registry = new WorkspaceRegistry(context.config, store);
+    const opened = await registry.openWorkspace(context.root);
+    const skill = opened.workspace.skills.find((candidate) => candidate.name === "telemetry-skill");
+    assert.ok(skill);
+    const readPath = registry.resolveReadPath(opened.workspace, skill.filePath);
+    registry.markReadPathLoaded(opened.workspace, readPath);
+    registry.markReadPathLoaded(opened.workspace, readPath);
+    const usage = store.listSkillUsage(20);
+    assert.equal(usage.length, 1);
+    assert.equal(usage[0]?.skillName, "telemetry-skill");
+    assert.equal(usage[0]?.viewCount, 2);
+    assert.equal(usage[0]?.useCount, 1);
+    assert.equal(usage[0]?.lastWorkspaceRoot, context.root);
+  } finally {
+    store.close();
+  }
+});
+
 test("opening a missing checkout creates its workspace root", async (t) => {
   const context = await fixture(t);
   const missingRoot = join(context.root, "missing", "workspace");

@@ -15,6 +15,8 @@ export type LocalAgentDaemonMethod =
   | "hello"
   | "agent.start"
   | "agent.continue"
+  | "agent.steer"
+  | "agent.stop"
   | "agent.get"
   | "agent.list"
   | "daemon.status"
@@ -25,6 +27,8 @@ export type LocalAgentDaemonRequest =
   | AgentDaemonRequestBase<"hello", Record<string, never>>
   | AgentDaemonRequestBase<"agent.start", StartLocalAgentInput>
   | AgentDaemonRequestBase<"agent.continue", { id: string; prompt: string; scope: LocalAgentWorkspaceScope; overrides?: RunOverrides }>
+  | AgentDaemonRequestBase<"agent.steer", { id: string; prompt: string; scope: LocalAgentWorkspaceScope }>
+  | AgentDaemonRequestBase<"agent.stop", { id: string; scope: LocalAgentWorkspaceScope }>
   | AgentDaemonRequestBase<"agent.get", { id: string; scope: LocalAgentWorkspaceScope }>
   | AgentDaemonRequestBase<"agent.list", LocalAgentWorkspaceScope>
   | AgentDaemonRequestBase<"daemon.status", Record<string, never>>
@@ -116,6 +120,29 @@ export function decodeLocalAgentDaemonRequest(value: unknown): LocalAgentDaemonR
         method,
         params: decodeContinueInput(params),
       } as LocalAgentDaemonRequest;
+    case "agent.steer":
+      return {
+        requestId,
+        protocolVersion,
+        authToken,
+        method,
+        params: {
+          id: requiredString(asRecord(params)?.id, "id"),
+          prompt: requiredString(asRecord(params)?.prompt, "prompt"),
+          scope: decodeWorkspaceScope(asRecord(params)?.scope),
+        },
+      } as LocalAgentDaemonRequest;
+    case "agent.stop":
+      return {
+        requestId,
+        protocolVersion,
+        authToken,
+        method,
+        params: {
+          id: requiredString(asRecord(params)?.id, "id"),
+          scope: decodeWorkspaceScope(asRecord(params)?.scope),
+        },
+      } as LocalAgentDaemonRequest;
     case "agent.get":
       return {
         requestId,
@@ -205,6 +232,10 @@ export function decodeAgentRecord(value: unknown): LocalAgentRecord {
     conflictFiles: optionalStringArray(record?.conflictFiles),
     handoffReason: optionalString(record?.handoffReason),
     providerUsage: optionalRecord(record?.providerUsage),
+    pendingSteer: optionalContentString(record?.pendingSteer),
+    steerRequestedAt: optionalString(record?.steerRequestedAt),
+    stopRequestedAt: optionalString(record?.stopRequestedAt),
+    lastActivityAt: optionalString(record?.lastActivityAt),
     createdAt: requiredString(record?.createdAt, "createdAt"),
     updatedAt: requiredString(record?.updatedAt, "updatedAt"),
   };

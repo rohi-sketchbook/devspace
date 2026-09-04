@@ -77,6 +77,7 @@ export interface LocalAgentManagerOptions {
 
 export type AgentStartError = AgentTargetError | AgentScopeError | AgentIsolationError | AgentConflictError | AgentStoreError;
 export type AgentContinueError = AgentStartError;
+export type AgentControlError = AgentStartError;
 export type AgentLookupError = AgentTargetError | AgentScopeError | AgentStoreError;
 export type AgentListError = AgentScopeError | AgentStoreError;
 
@@ -187,6 +188,94 @@ export class LocalAgentManager {
     });
   }
 
+  async steer(
+    agentId: string,
+    prompt: string,
+    scope: LocalAgentWorkspaceScope,
+  ): Promise<BetterResult<LocalAgentRecord, AgentControlError>> {
+    const manager = this;
+    return Result.gen(async function* () {
+      yield* manager.acceptingResult("steer", agentId);
+      const record = yield* manager.store.getByIdResult(agentId);
+      if (!record) return Result.err(agentNotFound(agentId));
+      yield* manager.agentWorkspaceResult(record, scope, "steer");
+      const driver = yield* manager.driverResult(record.provider, "steer", agentId);
+      const timestamp = new Date().toISOString();
+      manager.store.appendEvent(agentId, "steer_requested", prompt, { provider: record.provider });
+      if (!manager.activeTurns.has(agentId)) {
+        return manager.begin(record, prompt, {});
+      }
+
+      const queued = yield* manager.store.updateResult(agentId, {
+        pendingSteer: mergeSteeringPrompt(record.pendingSteer, prompt),
+        steerRequestedAt: timestamp,
+        lastActivityAt: timestamp,
+      });
+      if (!queued.providerSessionId) return Result.ok(queued);
+      const context = manager.runtimeContext(queued, driver);
+      let nativeSteer = false;
+      try {
+        nativeSteer = await manager.pool.steer(driver, context, queued.providerSessionId, prompt);
+      } catch (error) {
+        manager.log("warn", "agent_steer_native_failed", { agentId, provider: record.provider, error: errorMessage(error) });
+      }
+      if (!nativeSteer) return Result.ok(queued);
+      manager.store.appendEvent(agentId, "steer_applied", prompt, { provider: record.provider, mode: "same_turn" });
+      return manager.store.updateResult(agentId, {
+        pendingSteer: undefined,
+        steerRequestedAt: undefined,
+        lastActivityAt: new Date().toISOString(),
+      });
+    });
+  }
+
+  async stop(
+    agentId: string,
+    scope: LocalAgentWorkspaceScope,
+  ): Promise<BetterResult<LocalAgentRecord, AgentControlError>> {
+    const manager = this;
+    return Result.gen(async function* () {
+      yield* manager.acceptingResult("stop", agentId);
+      const record = yield* manager.store.getByIdResult(agentId);
+      if (!record) return Result.err(agentNotFound(agentId));
+      yield* manager.agentWorkspaceResult(record, scope, "stop");
+      const timestamp = new Date().toISOString();
+      manager.store.appendEvent(agentId, "stop_requested", undefined, { provider: record.provider });
+      if (!manager.activeTurns.has(agentId)) {
+        return manager.store.updateResult(agentId, {
+          status: "stopped",
+          pendingSteer: undefined,
+          steerRequestedAt: undefined,
+          stopRequestedAt: timestamp,
+          lastActivityAt: timestamp,
+        });
+      }
+      const driver = yield* manager.driverResult(record.provider, "stop", agentId);
+      const stopping = yield* manager.store.updateResult(agentId, {
+        pendingSteer: undefined,
+        steerRequestedAt: undefined,
+        stopRequestedAt: timestamp,
+        lastActivityAt: timestamp,
+      });
+      if (!stopping.providerSessionId) return Result.ok(stopping);
+      const interrupted = await manager.pool.interrupt(
+        driver,
+        manager.runtimeContext(stopping, driver),
+        stopping.providerSessionId,
+      );
+      if (!interrupted) {
+        return Result.err(new AgentConflictError({
+          code: "AGENT_CONFLICT",
+          agentId,
+          operation: "stop",
+          retryable: true,
+          message: `Agent ${agentId} could not be interrupted safely because its provider runtime is shared by another active turn.`,
+        }));
+      }
+      return Result.ok(stopping);
+    });
+  }
+
   get(
     agentId: string,
     scope: LocalAgentWorkspaceScope,
@@ -278,8 +367,11 @@ export class LocalAgentManager {
       error: undefined,
       errorCode: undefined,
       errorRetryable: undefined,
+      stopRequestedAt: undefined,
+      lastActivityAt: new Date().toISOString(),
     });
     if (updated.isErr()) return updated;
+    this.store.appendEvent(record.id, "turn_started", prompt, { provider: record.provider });
     // Defer invocation until after the tracking entry is visible. This keeps
     // cleanup correct even if runTurn later gains a synchronous completion path.
     const turn = Promise.resolve().then(() => this.runTurn(updated.value, prompt, overrides));
@@ -348,12 +440,36 @@ export class LocalAgentManager {
         agentDir: this.agentDir,
       };
       const callbacks: LocalAgentRunCallbacks = {
-        onSessionId: (providerSessionId) => {
+        onSessionId: async (providerSessionId) => {
           const current = this.store.getByIdResult(record.id);
           if (current.isErr()) throw current.error;
-          if (!current.value || current.value.providerSessionId === providerSessionId) return;
-          const updated = this.store.updateResult(record.id, { providerSessionId });
-          if (updated.isErr()) throw updated.error;
+          if (!current.value) return;
+          let latest = current.value;
+          if (latest.providerSessionId !== providerSessionId) {
+            const updated = this.store.updateResult(record.id, {
+              providerSessionId,
+              lastActivityAt: new Date().toISOString(),
+            });
+            if (updated.isErr()) throw updated.error;
+            latest = updated.value;
+          }
+          // `agents stop` may arrive while a provider runtime is starting, before
+          // its durable session/thread ID exists. Re-check the persisted stop
+          // request at the session-ID boundary and interrupt immediately so the
+          // request cannot be lost in that startup race.
+          if (!latest.stopRequestedAt) return;
+          const interrupted = await this.pool.interrupt(
+            driver.value,
+            { ...context, providerSessionId },
+            providerSessionId,
+          );
+          if (!interrupted) {
+            this.log("warn", "agent_stop_deferred", {
+              agentId: record.id,
+              provider: record.provider,
+              reason: "provider_session_started_without_safe_interrupt",
+            });
+          }
         },
       };
       const result = await this.pool.run(driver.value, context, input.value, callbacks);
@@ -365,6 +481,23 @@ export class LocalAgentManager {
       const current = this.store.getByIdResult(record.id);
       if (current.isErr()) throw current.error;
       if (!current.value) return;
+      if (current.value.stopRequestedAt) {
+        const stopped = this.store.updateResult(record.id, {
+          providerSessionId: runResult.providerSessionId ?? current.value.providerSessionId,
+          latestResponse: runResult.finalResponse || current.value.latestResponse,
+          status: "stopped",
+          pendingSteer: undefined,
+          steerRequestedAt: undefined,
+          stopRequestedAt: undefined,
+          lastActivityAt: new Date().toISOString(),
+          error: undefined,
+          errorCode: undefined,
+          errorRetryable: undefined,
+        });
+        if (stopped.isErr()) throw stopped.error;
+        this.store.appendEvent(record.id, "turn_stopped", runResult.finalResponse, { provider: record.provider });
+        return;
+      }
       const updated = this.store.updateResult(record.id, {
         providerSessionId: runResult.providerSessionId ?? current.value.providerSessionId,
         latestResponse: runResult.finalResponse,
@@ -373,13 +506,29 @@ export class LocalAgentManager {
         errorRetryable: undefined,
         handoffReason: undefined,
         providerUsage: runResult.providerUsage,
+        lastActivityAt: new Date().toISOString(),
       });
       if (updated.isErr()) throw updated.error;
       await this.refreshTaskSnapshot(updated.value.id, runResult.items, runResult.providerUsage);
       this.activeTurns.delete(record.id);
-      const completed = this.store.updateResult(updated.value.id, { status: "idle" });
+      this.store.appendEvent(record.id, "turn_completed", runResult.finalResponse, {
+        provider: record.provider,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
+      const pendingSteer = updated.value.pendingSteer?.trim();
+      const completed = this.store.updateResult(updated.value.id, {
+        status: "idle",
+        pendingSteer: undefined,
+        steerRequestedAt: undefined,
+      });
       if (completed.isErr()) throw completed.error;
       const finalRecord = completed.value;
+      if (pendingSteer) {
+        const steered = this.begin(finalRecord, pendingSteer, {});
+        if (steered.isErr()) {
+          this.log("warn", "agent_queued_steer_failed", { agentId: record.id, error: steered.error.message });
+        }
+      }
       this.log("info", "agent_run_completed", {
         provider: finalRecord.provider,
         agentId: finalRecord.id,
@@ -387,6 +536,21 @@ export class LocalAgentManager {
         durationMs: Math.max(0, Date.now() - startedAt),
       });
     } catch (error) {
+      const stopState = this.store.getByIdResult(record.id);
+      if (!stopState.isErr() && stopState.value?.stopRequestedAt) {
+        this.store.updateResult(record.id, {
+          status: "stopped",
+          stopRequestedAt: undefined,
+          pendingSteer: undefined,
+          steerRequestedAt: undefined,
+          lastActivityAt: new Date().toISOString(),
+          error: undefined,
+          errorCode: undefined,
+          errorRetryable: undefined,
+        });
+        this.store.appendEvent(record.id, "turn_stopped", undefined, { provider: record.provider });
+        return;
+      }
       if (isLocalAgentError(error)) {
         await this.persistRunError(record, error, startedAt);
         return;
@@ -417,6 +581,21 @@ export class LocalAgentManager {
     error: LocalAgentError,
     startedAt: number,
   ): Promise<void> {
+    const current = this.store.getByIdResult(record.id);
+    if (!current.isErr() && current.value?.stopRequestedAt) {
+      this.store.updateResult(record.id, {
+        status: "stopped",
+        stopRequestedAt: undefined,
+        pendingSteer: undefined,
+        steerRequestedAt: undefined,
+        lastActivityAt: new Date().toISOString(),
+        error: undefined,
+        errorCode: undefined,
+        errorRetryable: undefined,
+      });
+      this.store.appendEvent(record.id, "turn_stopped", undefined, { provider: record.provider });
+      return;
+    }
     const handoffReason = handoffReasonForError(error);
     const persisted = this.store.updateResult(record.id, {
       error: error.message,
@@ -435,11 +614,29 @@ export class LocalAgentManager {
       persistenceFailed: persisted.isErr(),
     });
     if (!persisted.isErr()) {
+      this.store.appendEvent(record.id, "turn_failed", error.message, {
+        provider: record.provider,
+        errorCode: error.code,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
       const cause = "cause" in error ? error.cause : undefined;
       await this.refreshTaskSnapshot(record.id, cause, providerUsageFromCause(cause), handoffReason);
       this.activeTurns.delete(record.id);
       this.store.updateResult(record.id, { status: "error" });
     }
+  }
+
+  private runtimeContext(record: LocalAgentRecord, driver: LocalAgentDriver): LocalAgentRuntimeContext {
+    return {
+      agentId: record.id,
+      provider: driver.provider,
+      workspaceRoot: record.executionRoot ?? record.workspaceRoot,
+      providerSessionId: record.providerSessionId,
+      writeMode: record.writeMode,
+      model: record.model,
+      thinking: record.thinking,
+      agentDir: this.agentDir,
+    };
   }
 
   private async executionWorkspaceResult(
@@ -726,6 +923,12 @@ export class LocalAgentManager {
 
 export function createLocalAgentManager(options: LocalAgentManagerOptions): LocalAgentManager {
   return new LocalAgentManager(options);
+}
+
+function mergeSteeringPrompt(current: string | undefined, next: string): string {
+  const trimmed = next.trim();
+  if (!current?.trim()) return trimmed;
+  return `${current.trim()}\n\nAdditional steering:\n${trimmed}`.slice(0, 16_384);
 }
 
 function errorMessage(error: unknown): string {

@@ -41,6 +41,33 @@ const whitespaceRequest = decodeLocalAgentDaemonRequest({
 if (whitespaceRequest.method !== "agent.start") throw new Error("expected agent.start request");
 assert.equal(whitespaceRequest.params.prompt, "  keep prompt whitespace  \n");
 
+const steerRequest = decodeLocalAgentDaemonRequest({
+  requestId: "req_steer",
+  protocolVersion: 3,
+  authToken: "test-secret",
+  method: "agent.steer",
+  params: {
+    id: "agt_1234",
+    prompt: "focus on tests",
+    scope: { workspaceId: "ws_test", workspaceRoot: "/tmp/project" },
+  },
+});
+assert.equal(steerRequest.method, "agent.steer");
+if (steerRequest.method !== "agent.steer") throw new Error("expected agent.steer request");
+assert.equal(steerRequest.params.prompt, "focus on tests");
+
+const stopRequest = decodeLocalAgentDaemonRequest({
+  requestId: "req_stop",
+  protocolVersion: 3,
+  authToken: "test-secret",
+  method: "agent.stop",
+  params: {
+    id: "agt_1234",
+    scope: { workspaceId: "ws_test", workspaceRoot: "/tmp/project" },
+  },
+});
+assert.equal(stopRequest.method, "agent.stop");
+
 assert.throws(
   () => decodeLocalAgentDaemonRequest({
     requestId: "req_2",
@@ -60,11 +87,17 @@ const record = decodeAgentRecord({
   provider: "codex",
   status: "idle",
   latestResponse: "  response whitespace  \n",
+  pendingSteer: "next direction",
+  steerRequestedAt: "steer-at",
+  stopRequestedAt: "stop-at",
+  lastActivityAt: "activity-at",
   createdAt: "now",
   updatedAt: "now",
 });
 assert.equal(record.id, "agt_1234");
 assert.equal(record.latestResponse, "  response whitespace  \n");
+assert.equal(record.pendingSteer, "next direction");
+assert.equal(record.lastActivityAt, "activity-at");
 
 const response = decodeLocalAgentDaemonResponse({
   requestId: "req_1",

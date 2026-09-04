@@ -37,6 +37,11 @@ const migrations: Migration[] = [
     name: "local-agent-task-handoff",
     up: migrateLocalAgentTaskHandoff,
   },
+  {
+    version: 7,
+    name: "local-agent-live-control-history-skill-usage",
+    up: migrateLocalAgentLiveControlHistorySkillUsage,
+  },
 ];
 
 export function migrateDatabase(sqlite: Database.Database): void {
@@ -225,6 +230,45 @@ function migrateLocalAgentTaskHandoff(sqlite: Database.Database): void {
   addColumnIfMissing(sqlite, "local_agent_sessions", "handoff_reason", "text");
   addColumnIfMissing(sqlite, "local_agent_sessions", "provider_usage_json", "text");
   sqlite.exec(`update local_agent_sessions set execution_root = workspace_root where execution_root is null`);
+}
+
+function migrateLocalAgentLiveControlHistorySkillUsage(sqlite: Database.Database): void {
+  addColumnIfMissing(sqlite, "local_agent_sessions", "pending_steer", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "steer_requested_at", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "stop_requested_at", "text");
+  addColumnIfMissing(sqlite, "local_agent_sessions", "last_activity_at", "text");
+  sqlite.exec(`
+    update local_agent_sessions
+    set last_activity_at = coalesce(last_activity_at, updated_at)
+    where last_activity_at is null;
+
+    create table if not exists local_agent_events (
+      id integer primary key autoincrement,
+      agent_id text not null,
+      event_type text not null,
+      content text,
+      metadata_json text,
+      created_at text not null,
+      foreign key (agent_id) references local_agent_sessions(id) on delete cascade
+    );
+
+    create index if not exists local_agent_events_agent_idx
+      on local_agent_events(agent_id, created_at desc, id desc);
+
+    create table if not exists skill_usage (
+      skill_path text primary key,
+      skill_name text not null,
+      view_count integer not null default 0,
+      use_count integer not null default 0,
+      first_seen_at text not null,
+      last_viewed_at text,
+      last_used_at text,
+      last_workspace_root text
+    );
+
+    create index if not exists skill_usage_last_used_idx
+      on skill_usage(last_used_at desc);
+  `);
 }
 
 function addColumnIfMissing(

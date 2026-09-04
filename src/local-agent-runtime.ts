@@ -62,6 +62,10 @@ export interface LocalAgentRuntime {
     input: LocalAgentRunInput,
     callbacks?: LocalAgentRunCallbacks,
   ): Promise<Result<LocalAgentRunResult, AgentProviderError>>;
+  /** Best-effort same-turn steering. Returns false when the provider cannot steer the active turn. */
+  steer?(providerSessionId: string, prompt: string): Promise<boolean>;
+  /** Best-effort interruption of the active turn. Returns false when no active turn can be interrupted. */
+  interrupt?(providerSessionId: string): Promise<boolean>;
   releaseSession(providerSessionId: string): Promise<void>;
   close(): Promise<void>;
   isAlive(): boolean;

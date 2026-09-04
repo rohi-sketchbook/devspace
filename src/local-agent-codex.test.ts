@@ -23,8 +23,13 @@ const cachedDriver = new CodexLocalAgentDriver(
 );
 const cachedContext = { agentId: "agt_test", provider: "codex" as const, workspaceRoot: "/tmp/project" };
 const resolvedCodexHome = resolve("/tmp/codex-home");
-assert.equal(cachedDriver.runtimeKey(cachedContext), `codex:/usr/local/bin/codex:${resolvedCodexHome}`);
-assert.equal(cachedDriver.runtimeKey(cachedContext), `codex:/usr/local/bin/codex:${resolvedCodexHome}`);
+assert.equal(cachedDriver.runtimeKey(cachedContext), `codex:agt_test:/usr/local/bin/codex:${resolvedCodexHome}`);
+assert.equal(cachedDriver.runtimeKey(cachedContext), `codex:agt_test:/usr/local/bin/codex:${resolvedCodexHome}`);
+assert.notEqual(
+  cachedDriver.runtimeKey({ ...cachedContext, agentId: "agt_other" }),
+  cachedDriver.runtimeKey(cachedContext),
+  "Codex runtimes are isolated per logical agent so stop cannot affect another worker",
+);
 assert.equal(resolverCalls, 1, "Codex executable identity is resolved once per driver lifecycle");
 
 assert.equal(parseCodexVersion("codex-cli 0.9.1"), "0.9.1");

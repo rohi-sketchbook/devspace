@@ -166,6 +166,15 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
         await callbacks?.onSessionId?.(threadId);
         const completed = await this.rpc.runTurn(threadId, turnParams(input, threadId));
         const parsed = parseCompletedTurn(completed.event.params, completed.items);
+        if (parsed.interrupted) {
+          return {
+            provider: this.provider,
+            providerSessionId: threadId,
+            finalResponse: parsed.finalResponse.trim(),
+            items: parsed.items,
+            providerUsage,
+          };
+        }
         if (parsed.failure) {
           if (isProviderUsageLimitCause(completed.event.params) || isProviderUsageLimitCause(parsed.failure)) {
             throw new AgentProviderUsageLimitError({
@@ -216,6 +225,14 @@ export class CodexAppServerRuntime implements LocalAgentRuntime {
       // preflight is advisory; a real usage-limit error is still handled by the turn path.
       return undefined;
     }
+  }
+
+  async steer(providerSessionId: string, prompt: string): Promise<boolean> {
+    return this.rpc.steerTurn(providerSessionId, prompt);
+  }
+
+  async interrupt(providerSessionId: string): Promise<boolean> {
+    return this.rpc.interruptTurn(providerSessionId);
   }
 
   async releaseSession(providerSessionId: string): Promise<void> {
@@ -279,11 +296,11 @@ export class CodexLocalAgentDriver implements LocalAgentDriver {
     private readonly commandResolver: CodexCommandResolver = resolveCodexCommand,
   ) {}
 
-  runtimeKey(_context: LocalAgentRuntimeContext): string {
+  runtimeKey(context: LocalAgentRuntimeContext): string {
     const command = this.resolveCommand();
     const executable = command?.executable ?? this.env.CODEX_COMMAND ?? "codex";
     const codexHome = resolve(this.env.CODEX_HOME ?? join(homedir(), ".codex"));
-    return `codex:${executable}:${codexHome}`;
+    return `codex:${context.agentId}:${executable}:${codexHome}`;
   }
 
   async createRuntime(_context: LocalAgentRuntimeContext) {
@@ -425,6 +442,24 @@ class CodexAppServerRpc {
     }
   }
 
+  async steerTurn(threadId: string, prompt: string): Promise<boolean> {
+    const turn = this.turns.get(threadId);
+    if (!turn?.turnId) return false;
+    await this.request("turn/steer", {
+      threadId,
+      turnId: turn.turnId,
+      input: [{ type: "text", text: prompt }],
+    });
+    return true;
+  }
+
+  async interruptTurn(threadId: string): Promise<boolean> {
+    const turn = this.turns.get(threadId);
+    if (!turn?.turnId) return false;
+    await this.request("turn/interrupt", { threadId, turnId: turn.turnId });
+    return true;
+  }
+
   fail(error: Error): void {
     if (this.fatalError) return;
     this.fatalError = new Error(`${error.message}${this.stderr.trim() ? `\n${this.stderr.trim()}` : ""}${this.version ? `\ncodex version: ${this.version}` : ""}`);
@@ -534,6 +569,7 @@ function parseCompletedTurn(params: unknown, items: unknown[]): {
   finalResponse: string;
   items: unknown[];
   failure?: string;
+  interrupted?: boolean;
 } {
   const turn = asRecord(asRecord(params)?.turn);
   const turnItems = Array.isArray(turn?.items) ? turn.items : undefined;
@@ -554,7 +590,7 @@ function parseCompletedTurn(params: unknown, items: unknown[]): {
   const failure = status === "failed"
     ? directString(error?.message) ?? "Codex turn failed."
     : undefined;
-  return { finalResponse, items: completedItems, failure };
+  return { finalResponse, items: completedItems, failure, interrupted: status === "interrupted" };
 }
 
 export function codexAppServerError(message: string, version?: string, stderr?: string): Error {

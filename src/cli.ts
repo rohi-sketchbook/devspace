@@ -301,6 +301,9 @@ function printHelp(): void {
       "  devspace agents ls       List subagent sessions",
       "  devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--isolation <mode>] <prompt>",
       "  devspace agents continue <id> [--model <model>] [--thinking <level>] [--write-mode <mode>] <prompt>",
+      "  devspace agents running    List only active subagent turns",
+      "  devspace agents steer <id> <prompt>",
+      "  devspace agents stop <id>",
       "  devspace agents show <id>",
       "  devspace agents handoff <id>",
       "  devspace agents daemon <status|stop|logs>",
@@ -326,6 +329,15 @@ async function runAgentsCommand(args: string[]): Promise<void> {
       return;
     case "continue":
       await runAgentsContinue(commandArgs, json);
+      return;
+    case "running":
+      await runAgentsRunning(json);
+      return;
+    case "steer":
+      await runAgentsSteer(commandArgs, json);
+      return;
+    case "stop":
+      await runAgentsStop(commandArgs, json);
       return;
     case "show":
       await runAgentsShow(commandArgs, json);
@@ -412,6 +424,47 @@ async function runAgentsContinue(args: string[], json: boolean): Promise<void> {
     return;
   }
   console.log(formatAgentLine(record));
+}
+
+async function runAgentsRunning(json: boolean): Promise<void> {
+  const config = loadConfig();
+  const client = createLocalAgentClient(config);
+  const result = await client.list(resolveCurrentWorkspaceScope());
+  const agents = presentAgentResult(result, json);
+  if (!agents) return;
+  const running = agents.filter((agent) => agent.status === "starting" || agent.status === "running");
+  if (json) {
+    console.log(JSON.stringify(running, null, 2));
+    return;
+  }
+  if (running.length === 0) {
+    console.log("No running subagent sessions found for this workspace.");
+    return;
+  }
+  for (const agent of running) console.log(formatAgentLine(agent));
+}
+
+async function runAgentsSteer(args: string[], json: boolean): Promise<void> {
+  const [id, ...promptParts] = args;
+  const prompt = promptParts.join(" ").trim();
+  if (!id || !prompt) throw new Error("Usage: devspace agents steer <id> <prompt>");
+  const config = loadConfig();
+  const client = createLocalAgentClient(config);
+  const record = presentAgentResult(await client.steer(id, prompt, resolveCurrentWorkspaceScope()), json);
+  if (!record) return;
+  if (json) console.log(JSON.stringify(record, null, 2));
+  else console.log(formatAgentLine(record));
+}
+
+async function runAgentsStop(args: string[], json: boolean): Promise<void> {
+  const [id] = args;
+  if (!id) throw new Error("Usage: devspace agents stop <id>");
+  const config = loadConfig();
+  const client = createLocalAgentClient(config);
+  const record = presentAgentResult(await client.stopAgent(id, resolveCurrentWorkspaceScope()), json);
+  if (!record) return;
+  if (json) console.log(JSON.stringify(record, null, 2));
+  else console.log(formatAgentLine(record));
 }
 
 async function runAgentsShow(args: string[], json: boolean): Promise<void> {
@@ -565,6 +618,9 @@ function printAgentsHelp(): void {
       "  devspace agents ls [--json]",
       "  devspace agents run <profile-or-provider> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--isolation <mode>] [--usage-threshold <percent>] [--json] <prompt>",
       "  devspace agents continue <id> [--model <model>] [--thinking <level>] [--write-mode <mode>] [--usage-threshold <percent>] [--json] <prompt>",
+      "  devspace agents running [--json]",
+      "  devspace agents steer <id> [--json] <prompt>",
+      "  devspace agents stop <id> [--json]",
       "  devspace agents show <id> [--json]",
       "  devspace agents handoff <id> [--json]",
       "  devspace agents daemon <status|stop|logs> [--json]",

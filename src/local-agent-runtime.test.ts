@@ -125,6 +125,34 @@ assert.equal(runtime.closeCount, 1, "runtime close is idempotent");
 assert.deepEqual(runtime.releasedSessions, [], "shutdown closes the runtime without racing session release");
 assert.equal(pool.size, 0);
 
+class InterruptFailureRuntime extends FakeRuntime {
+  async interrupt(): Promise<boolean> {
+    throw new Error("provider interrupt startup race");
+  }
+}
+const interruptFailureRuntime = new InterruptFailureRuntime();
+const interruptFailurePool = new LocalAgentRuntimePool();
+const interruptFailureDriver: LocalAgentDriver = {
+  provider: "codex",
+  idleTimeoutMs: Number.POSITIVE_INFINITY,
+  runtimeKey: (runtimeContext) => `interrupt-fallback:${runtimeContext.agentId}`,
+  createRuntime: async () => Result.ok(interruptFailureRuntime),
+};
+const interruptFailureRun = interruptFailurePool.run(
+  interruptFailureDriver,
+  context,
+  { ...input, prompt: "wait", providerSessionId: "thread_race" },
+);
+await new Promise<void>((resolve) => setImmediate(resolve));
+assert.equal(
+  await interruptFailurePool.interrupt(interruptFailureDriver, context, "thread_race"),
+  true,
+  "an isolated runtime falls back to process close when the provider interrupt throws",
+);
+await interruptFailureRun;
+assert.equal(interruptFailureRuntime.closeCount, 1);
+assert.equal(interruptFailurePool.size, 0);
+
 let clock = 0;
 const sessionRuntime = new FakeRuntime();
 const sessionPool = new LocalAgentRuntimePool({

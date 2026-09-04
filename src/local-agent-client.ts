@@ -40,6 +40,7 @@ import {
 } from "./local-agent-daemon-lifecycle.js";
 import type {
   AgentContinueError,
+  AgentControlError,
   AgentListError,
   AgentLookupError,
   AgentStartError,
@@ -55,7 +56,8 @@ const RETRY_DELAY_MS = 40;
 type RequestError<M extends LocalAgentDaemonRequest["method"]> =
   M extends "agent.start" ? AgentStartError | AgentDaemonError
     : M extends "agent.continue" ? AgentContinueError | AgentDaemonError
-      : M extends "agent.get" ? AgentLookupError | AgentDaemonError
+      : M extends "agent.steer" | "agent.stop" ? AgentControlError | AgentDaemonError
+        : M extends "agent.get" ? AgentLookupError | AgentDaemonError
         : M extends "agent.list" ? AgentListError | AgentDaemonError
           : AgentDaemonError;
 
@@ -111,6 +113,23 @@ export class LocalAgentClient {
       ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     });
     return decodeRequestResult(result, "agent.continue", decodeAgentRecord);
+  }
+
+  async steer(
+    agentId: string,
+    prompt: string,
+    scope: LocalAgentWorkspaceScope,
+  ): Promise<BetterResult<LocalAgentRecord, AgentControlError | AgentDaemonError>> {
+    const result = await this.request("agent.steer", { id: agentId, prompt, scope });
+    return decodeRequestResult(result, "agent.steer", decodeAgentRecord);
+  }
+
+  async stopAgent(
+    agentId: string,
+    scope: LocalAgentWorkspaceScope,
+  ): Promise<BetterResult<LocalAgentRecord, AgentControlError | AgentDaemonError>> {
+    const result = await this.request("agent.stop", { id: agentId, scope });
+    return decodeRequestResult(result, "agent.stop", decodeAgentRecord);
   }
 
   async get(
@@ -504,6 +523,8 @@ function isRequestError(
   switch (method) {
     case "agent.start":
     case "agent.continue":
+    case "agent.steer":
+    case "agent.stop":
       return category === "target"
         || category === "scope"
         || category === "isolation"

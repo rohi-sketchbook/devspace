@@ -34,6 +34,7 @@ import {
 import type { Result } from "better-result";
 import type {
   AgentContinueError,
+  AgentControlError,
   AgentListError,
   AgentLookupError,
   AgentStartError,
@@ -51,6 +52,8 @@ const DEFAULT_DAEMON_SHUTDOWN_TIMEOUT_MS = 10_000;
 export interface LocalAgentDaemonManager {
   start(input: StartLocalAgentInput): Promise<Result<LocalAgentRecord, AgentStartError>>;
   continue(agentId: string, prompt: string, overrides: RunOverrides | undefined, scope: LocalAgentWorkspaceScope): Promise<Result<LocalAgentRecord, AgentContinueError>>;
+  steer(agentId: string, prompt: string, scope: LocalAgentWorkspaceScope): Promise<Result<LocalAgentRecord, AgentControlError>>;
+  stop(agentId: string, scope: LocalAgentWorkspaceScope): Promise<Result<LocalAgentRecord, AgentControlError>>;
   get(agentId: string, scope: LocalAgentWorkspaceScope): Result<LocalAgentRecord, AgentLookupError>;
   list(scope: LocalAgentWorkspaceScope): Result<LocalAgentRecord[], AgentListError>;
   evictIdle(now?: number): Promise<void>;
@@ -301,6 +304,17 @@ export class LocalAgentDaemon {
           request.params.id,
           request.params.prompt,
           request.params.overrides,
+          request.params.scope,
+        ));
+      case "agent.steer":
+        return unwrapManagerResult(await this.manager.steer(
+          request.params.id,
+          request.params.prompt,
+          request.params.scope,
+        ));
+      case "agent.stop":
+        return unwrapManagerResult(await this.manager.stop(
+          request.params.id,
           request.params.scope,
         ));
       case "agent.get":

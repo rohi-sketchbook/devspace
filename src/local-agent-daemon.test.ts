@@ -50,6 +50,18 @@ class FakeManager implements LocalAgentDaemonManager {
     return Result.ok({ ...record, status: "running" } as LocalAgentRecord);
   }
 
+  async steer(
+    _agentId: string,
+    _prompt: string,
+    _scope: { workspaceId: string; workspaceRoot: string },
+  ) {
+    return Result.ok({ ...record, pendingSteer: "steer" } as LocalAgentRecord);
+  }
+
+  async stop(_agentId: string, _scope: { workspaceId: string; workspaceRoot: string }) {
+    return Result.ok({ ...record, status: "stopped" } as LocalAgentRecord);
+  }
+
   get(_id: string, _scope: { workspaceId: string; workspaceRoot: string }) {
     return Result.ok(record);
   }
@@ -124,6 +136,8 @@ try {
   const recordScope = { workspaceId: record.workspaceId!, workspaceRoot: record.workspaceRoot };
   assert.equal(unwrap(await client.get(record.id, recordScope)).id, record.id);
   assert.equal(unwrap(await client.list(recordScope))[0]?.id, record.id);
+  assert.equal(unwrap(await client.steer(record.id, "focus on tests", recordScope)).pendingSteer, "steer");
+  assert.equal(unwrap(await client.stopAgent(record.id, recordScope)).status, "stopped");
   assert.equal(unwrap(await client.status()).state, "ready");
 
   unwrap(await client.stop());

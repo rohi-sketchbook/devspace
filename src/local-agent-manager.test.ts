@@ -40,8 +40,11 @@ const disabledProfile: LocalAgentProfile = {
 class FakeRuntime implements LocalAgentRuntime {
   readonly provider = "codex" as const;
   readonly inputs: LocalAgentRunInput[] = [];
+  readonly steered: string[] = [];
+  interrupted = false;
   closed = false;
   private releaseHold: (() => void) | undefined;
+  private releaseSessionStart: (() => void) | undefined;
 
   async run(
     input: LocalAgentRunInput,
@@ -54,7 +57,13 @@ class FakeRuntime implements LocalAgentRuntime {
     }
     if (input.prompt.includes("defect")) throw new TypeError("internal defect");
     if (input.prompt.includes("fail")) return Result.err(providerFailure("provider failed"));
-    if (input.prompt.includes("hold")) {
+    if (input.prompt.includes("hold-before-session")) {
+      await new Promise<void>((resolve) => { this.releaseSessionStart = resolve; });
+      await callbacks?.onSessionId?.("thread_test");
+      if (this.closed) return Result.err(providerFailure("runtime closed after startup stop"));
+      await new Promise<void>((resolve) => { this.releaseHold = resolve; });
+    } else if (input.prompt.includes("hold")) {
+      await callbacks?.onSessionId?.("thread_test");
       await new Promise<void>((resolve) => { this.releaseHold = resolve; });
     }
     return Result.ok({
@@ -68,6 +77,22 @@ class FakeRuntime implements LocalAgentRuntime {
   release(): void {
     this.releaseHold?.();
     this.releaseHold = undefined;
+  }
+
+  allowSessionStart(): void {
+    this.releaseSessionStart?.();
+    this.releaseSessionStart = undefined;
+  }
+
+  async steer(_providerSessionId: string, prompt: string): Promise<boolean> {
+    this.steered.push(prompt);
+    return true;
+  }
+
+  async interrupt(): Promise<boolean> {
+    this.interrupted = true;
+    this.release();
+    return true;
   }
 
   releaseSession(): Promise<void> {
@@ -217,6 +242,10 @@ if (conflict.isErr()) {
   assert.equal(conflict.error.code, "AGENT_CONFLICT");
   assert.equal("agentId" in conflict.error ? conflict.error.agentId : undefined, first.id);
 }
+const steered = unwrap(await manager.steer(first.id, "focus on tests", scope));
+assert.equal(steered.status, "running");
+assert.deepEqual(runtimes.get(first.id)!.steered, ["focus on tests"]);
+assert.equal(getRecord(first.id).pendingSteer, undefined);
 
 runtimes.get(first.id)!.release();
 await waitFor(() => getRecord(first.id).status === "idle");
@@ -236,6 +265,36 @@ const second = unwrap(await manager.start({
 await waitFor(() => getRecord(second.id).status === "idle");
 assert.notEqual(first.id, second.id);
 assert.equal(runtimes.size, 2, "different agents receive independent logical runtimes");
+
+const stoppable = unwrap(await manager.start({
+  target: "reviewer",
+  prompt: "hold for stop",
+  workspaceId: scope.workspaceId,
+  workspaceRoot: root,
+}));
+await waitFor(() => getRecord(stoppable.id).providerSessionId === "thread_test");
+const stopping = unwrap(await manager.stop(stoppable.id, scope));
+assert.equal(stopping.stopRequestedAt !== undefined, true);
+assert.equal(runtimes.get(stoppable.id)!.interrupted, true);
+assert.equal(runtimes.get(stoppable.id)!.closed, true, "exclusive stop closes the disposable provider runtime");
+await waitFor(() => getRecord(stoppable.id).status === "stopped");
+assert.equal(getRecord(stoppable.id).stopRequestedAt, undefined);
+assert.equal(store.listEvents(stoppable.id).some((event) => event.eventType === "turn_stopped"), true);
+
+const startupRace = unwrap(await manager.start({
+  target: "reviewer",
+  prompt: "hold-before-session",
+  workspaceId: scope.workspaceId,
+  workspaceRoot: root,
+}));
+await waitFor(() => runtimes.has(startupRace.id));
+const startupStopping = unwrap(await manager.stop(startupRace.id, scope));
+assert.equal(startupStopping.providerSessionId, undefined);
+assert.equal(startupStopping.stopRequestedAt !== undefined, true);
+runtimes.get(startupRace.id)!.allowSessionStart();
+await waitFor(() => getRecord(startupRace.id).status === "stopped");
+assert.equal(runtimes.get(startupRace.id)!.interrupted, true, "startup-race stop interrupts when the session id arrives");
+assert.equal(runtimes.get(startupRace.id)!.closed, true, "startup-race stop closes the isolated runtime");
 
 const failed = unwrap(await manager.start({
   target: "reviewer",

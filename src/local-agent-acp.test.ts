@@ -265,8 +265,13 @@ const cachedContext = {
   writeMode: "allowed" as const,
 };
 const resolvedProject = resolve("/tmp/project");
-assert.equal(cachedDriver.runtimeKey(cachedContext), `acp:cursor:/usr/local/bin/cursor-agent:allowed:${resolvedProject}`);
-assert.equal(cachedDriver.runtimeKey(cachedContext), `acp:cursor:/usr/local/bin/cursor-agent:allowed:${resolvedProject}`);
+assert.equal(cachedDriver.runtimeKey(cachedContext), `acp:cursor:agt_acp:/usr/local/bin/cursor-agent:allowed:${resolvedProject}`);
+assert.equal(cachedDriver.runtimeKey(cachedContext), `acp:cursor:agt_acp:/usr/local/bin/cursor-agent:allowed:${resolvedProject}`);
+assert.notEqual(
+  cachedDriver.runtimeKey({ ...cachedContext, agentId: "agt_other" }),
+  cachedDriver.runtimeKey(cachedContext),
+  "ACP runtimes are isolated per logical agent",
+);
 for (const writeMode of ["read_only", "allowed", "full_access"] as const) {
   assert.notEqual(
     cachedDriver.runtimeKey({ ...cachedContext, writeMode, workspaceRoot: "/tmp/other-project" }),

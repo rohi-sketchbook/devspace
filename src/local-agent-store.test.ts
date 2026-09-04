@@ -65,6 +65,19 @@ try {
   assert.deepEqual(storedError?.conflictFiles, ["src/a.ts"]);
   assert.equal(storedError?.handoffReason, "file_conflict");
   assert.equal(storedError?.providerUsage?.usedPercent, 42);
+  const controlled = store.update(created.id, {
+    pendingSteer: "focus on tests",
+    steerRequestedAt: "2026-09-04T00:00:00.000Z",
+    stopRequestedAt: "2026-09-04T00:01:00.000Z",
+    lastActivityAt: "2026-09-04T00:02:00.000Z",
+  });
+  assert.equal(controlled.pendingSteer, "focus on tests");
+  assert.equal(store.getById(created.id)?.lastActivityAt, "2026-09-04T00:02:00.000Z");
+  store.appendEvent(created.id, "turn_completed", "done", { durationMs: 123 });
+  const events = store.listEvents(created.id);
+  assert.equal(events[0]?.eventType, "turn_completed");
+  assert.equal(events[0]?.content, "done");
+  assert.equal(events[0]?.metadata?.durationMs, 123);
   assert.equal(store.update(created.id, { latestResponse: undefined }).latestResponse, undefined);
   assert.deepEqual(
     store.list({ workspaceRoot: join(root, "project") }).map((agent) => agent.latestResponse),
@@ -152,6 +165,9 @@ assert.deepEqual(store.list({ workspaceRoot: join(root, "other") }), []);
   assert.equal(reloadedRecord?.error, "old error");
   assert.equal(reloadedRecord?.errorCode, "DAEMON_TIMEOUT");
   assert.equal(reloadedRecord?.errorRetryable, true);
+  assert.equal(reloadedRecord?.lastActivityAt, "2026-08-01T00:00:00.000Z");
+  upgradedStore.appendEvent("agt_legacy", "migrated", "legacy history");
+  assert.equal(upgradedStore.listEvents("agt_legacy")[0]?.content, "legacy history");
 } finally {
   for (const store of stores) {
     store.close();

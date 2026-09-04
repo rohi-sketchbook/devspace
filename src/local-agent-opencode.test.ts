@@ -80,7 +80,7 @@ const second = await pool.run(driver, {
   workspaceRoot: "/tmp/project",
 });
 
-assert.equal(factoryCalls, 1, "OpenCode agents share one server runtime");
+assert.equal(factoryCalls, 2, "OpenCode agents receive isolated server runtimes");
 assert.equal(first.isOk(), true);
 assert.equal(second.isOk(), true);
 if (first.isErr()) throw first.error;
@@ -227,4 +227,4 @@ await recoveringPool.close();
 
 await pool.close();
 await pool.close();
-assert.equal(closeCalls, 1, "shared OpenCode server closes once");
+assert.equal(closeCalls, 2, "each isolated OpenCode server closes once");

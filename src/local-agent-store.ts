@@ -31,6 +31,10 @@ export interface LocalAgentRecord {
   conflictFiles?: string[];
   handoffReason?: string;
   providerUsage?: LocalAgentProviderUsage;
+  pendingSteer?: string;
+  steerRequestedAt?: string;
+  stopRequestedAt?: string;
+  lastActivityAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -83,6 +87,10 @@ interface LocalAgentRow {
   conflict_files_json: string | null;
   handoff_reason: string | null;
   provider_usage_json: string | null;
+  pending_steer: string | null;
+  steer_requested_at: string | null;
+  stop_requested_at: string | null;
+  last_activity_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -149,6 +157,7 @@ export class LocalAgentStore {
       baseSha: input.baseSha,
       taskPrompt: input.taskPrompt,
       status: "starting",
+      lastActivityAt: now,
       createdAt: now,
       updatedAt: now,
     };
@@ -169,9 +178,10 @@ export class LocalAgentStore {
           base_sha,
           task_prompt,
           status,
+          last_activity_at,
           created_at,
           updated_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.id,
@@ -187,6 +197,7 @@ export class LocalAgentStore {
         record.baseSha ?? null,
         record.taskPrompt ?? null,
         record.status,
+        record.lastActivityAt ?? record.updatedAt,
         record.createdAt,
         record.updatedAt,
       );
@@ -256,6 +267,10 @@ export class LocalAgentStore {
           conflict_files_json = ?,
           handoff_reason = ?,
           provider_usage_json = ?,
+          pending_steer = ?,
+          steer_requested_at = ?,
+          stop_requested_at = ?,
+          last_activity_at = ?,
           updated_at = ?
          where id = ?`,
       )
@@ -282,6 +297,10 @@ export class LocalAgentStore {
         encodeStringArray(updated.conflictFiles),
         updated.handoffReason ?? null,
         updated.providerUsage ? JSON.stringify(updated.providerUsage) : null,
+        updated.pendingSteer ?? null,
+        updated.steerRequestedAt ?? null,
+        updated.stopRequestedAt ?? null,
+        updated.lastActivityAt ?? updated.updatedAt,
         updated.updatedAt,
         updated.id,
       );
@@ -294,6 +313,45 @@ export class LocalAgentStore {
     patch: Partial<Omit<LocalAgentRecord, "id" | "createdAt">>,
   ): BetterResult<LocalAgentRecord, AgentStoreError> {
     return storeResult("update", () => this.update(id, patch));
+  }
+
+  appendEvent(agentId: string, eventType: string, content?: string, metadata?: Record<string, unknown>): void {
+    const createdAt = new Date().toISOString();
+    this.database.sqlite
+      .prepare(`insert into local_agent_events (agent_id, event_type, content, metadata_json, created_at) values (?, ?, ?, ?, ?)`)
+      .run(agentId, eventType, content?.slice(0, 16_384) ?? null, metadata ? JSON.stringify(metadata) : null, createdAt);
+    this.database.sqlite.exec(`
+      delete from local_agent_events
+      where id in (
+        select id from local_agent_events order by created_at desc, id desc limit -1 offset 5000
+      );
+    `);
+  }
+
+  listEvents(agentId: string, limit = 50): Array<{
+    id: number;
+    agentId: string;
+    eventType: string;
+    content?: string;
+    metadata?: Record<string, unknown>;
+    createdAt: string;
+  }> {
+    const max = Math.max(1, Math.min(Math.trunc(limit) || 50, 500));
+    const rows = this.database.sqlite.prepare(`
+      select id, agent_id, event_type, content, metadata_json, created_at
+      from local_agent_events where agent_id = ?
+      order by created_at desc, id desc limit ?
+    `).all(agentId, max) as Array<{
+      id: number; agent_id: string; event_type: string; content: string | null; metadata_json: string | null; created_at: string;
+    }>;
+    return rows.map((row) => ({
+      id: row.id,
+      agentId: row.agent_id,
+      eventType: row.event_type,
+      content: row.content ?? undefined,
+      metadata: decodeMetadata(row.metadata_json),
+      createdAt: row.created_at,
+    }));
   }
 
   reconcileActiveRuns(message = "DevSpace restarted while this agent turn was running."): number {
@@ -349,6 +407,10 @@ function rowToLocalAgentRecord(row: LocalAgentRow): LocalAgentRecord {
     conflictFiles: decodeStringArray(row.conflict_files_json),
     handoffReason: row.handoff_reason ?? undefined,
     providerUsage: decodeProviderUsage(row.provider_usage_json),
+    pendingSteer: row.pending_steer ?? undefined,
+    steerRequestedAt: row.steer_requested_at ?? undefined,
+    stopRequestedAt: row.stop_requested_at ?? undefined,
+    lastActivityAt: row.last_activity_at ?? row.updated_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -374,6 +436,18 @@ function decodeProviderUsage(value: string | null): LocalAgentProviderUsage | un
     const parsed = JSON.parse(value);
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? parsed as LocalAgentProviderUsage
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeMetadata(value: string | null): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
       : undefined;
   } catch {
     return undefined;

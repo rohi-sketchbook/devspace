@@ -207,6 +207,55 @@ export class LocalAgentRuntimePool {
     }
   }
 
+  async steer(
+    driver: LocalAgentDriver,
+    context: LocalAgentRuntimeContext,
+    providerSessionId: string,
+    prompt: string,
+  ): Promise<boolean> {
+    const entry = this.entries.get(driver.runtimeKey(context));
+    const runtime = entry?.runtime;
+    if (!entry || entry.closing || !runtime?.isAlive() || !runtime.steer) return false;
+    return runtime.steer(providerSessionId, prompt);
+  }
+
+  async interrupt(
+    driver: LocalAgentDriver,
+    context: LocalAgentRuntimeContext,
+    providerSessionId: string,
+  ): Promise<boolean> {
+    const entry = this.entries.get(driver.runtimeKey(context));
+    const runtime = entry?.runtime;
+    if (!entry || entry.closing || !runtime?.isAlive()) return false;
+    if (runtime.interrupt) {
+      try {
+        if (await runtime.interrupt(providerSessionId)) {
+          // A native per-turn interrupt is sufficient when the runtime is shared.
+          // When this is the only active run, also close the disposable provider
+          // runtime so an in-flight tool subprocess cannot outlive `agents stop`.
+          if (entry.activeRuns === 1) await this.removeAndClose(entry, "agent_stop");
+          return true;
+        }
+      } catch (error) {
+        this.log("warn", "harness_runtime_interrupt_failed", {
+          provider: driver.provider,
+          runtimeKeyHash: hashRuntimeKey(entry.key),
+          agentId: context.agentId,
+          error: errorMessage(error),
+        });
+        // Startup races can briefly make a provider's native interrupt reject
+        // even though the isolated runtime itself is safe to terminate. Fall
+        // through to the single-active-run runtime-close fallback below.
+      }
+    }
+    // A provider without per-turn cancellation can still be stopped safely when
+    // this runtime has exactly one active run. Persisted session IDs allow later
+    // continuation in a fresh runtime.
+    if (entry.activeRuns !== 1) return false;
+    await this.removeAndClose(entry, "agent_stop");
+    return true;
+  }
+
   private async discardRuntime(
     entry: RuntimeEntry,
     provider: LocalAgentProvider,
@@ -372,10 +421,15 @@ export class LocalAgentRuntimePool {
         return;
       }
       if (!runtime) return;
-      if (reason !== "server_shutdown" && reason !== "runtime_crashed" && reason !== "runtime_not_alive") {
+      if (
+        reason !== "server_shutdown"
+        && reason !== "agent_stop"
+        && reason !== "runtime_crashed"
+        && reason !== "runtime_not_alive"
+      ) {
         await this.waitForNoActiveRuns(entry);
       }
-      if (reason === "server_shutdown") {
+      if (reason === "server_shutdown" || reason === "agent_stop") {
         // Shutdown is terminal for the provider runtime. Closing it first
         // aborts stuck turns and avoids waiting forever before process cleanup.
         // Do not start new individual releases here: that would race an active

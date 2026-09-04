@@ -294,9 +294,16 @@ export class WorkspaceRegistry {
 
   resolveReadPath(workspace: Workspace, inputPath: string): WorkspaceReadPath {
     try {
+      const absolutePath = this.resolvePath(workspace, inputPath);
+      const skillRead = resolveSkillReadPath(
+        workspace.skills,
+        workspace.activatedSkillDirs,
+        absolutePath,
+      );
       return {
-        absolutePath: this.resolvePath(workspace, inputPath),
+        absolutePath,
         readRoots: [workspace.root],
+        ...(skillRead ? { skillRead } : {}),
       };
     } catch (workspaceError) {
       const skillRead = resolveSkillReadPath(
@@ -316,7 +323,16 @@ export class WorkspaceRegistry {
 
   markReadPathLoaded(workspace: Workspace, readPath: WorkspaceReadPath): void {
     if (readPath.skillRead?.isSkillFile) {
-      markSkillActivated(workspace.activatedSkillDirs, readPath.skillRead.skill);
+      const skill = readPath.skillRead.skill;
+      const firstUse = !workspace.activatedSkillDirs.has(resolve(skill.baseDir));
+      markSkillActivated(workspace.activatedSkillDirs, skill);
+      this.store?.recordSkillUsage({
+        skillPath: skill.filePath,
+        skillName: skill.name,
+        workspaceRoot: workspace.root,
+        viewed: true,
+        used: firstUse,
+      });
     }
   }
 

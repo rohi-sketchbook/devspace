@@ -82,6 +82,9 @@ server before relying on subagents again.
 node "$DEVSPACE_CLI_PATH" agents ls
 node "$DEVSPACE_CLI_PATH" agents run <profile-or-provider> "<prompt>"
 node "$DEVSPACE_CLI_PATH" agents continue <id> "<prompt>"
+node "$DEVSPACE_CLI_PATH" agents running
+node "$DEVSPACE_CLI_PATH" agents steer <id> "<prompt>"
+node "$DEVSPACE_CLI_PATH" agents stop <id>
 node "$DEVSPACE_CLI_PATH" agents show <id>
 node "$DEVSPACE_CLI_PATH" agents handoff <id>
 ```
@@ -97,8 +100,19 @@ DevSpace agent id.
 `run <provider> "<prompt>"` starts a raw built-in provider when no configured
 profile is needed. Built-in providers are listed by `open_workspace`.
 
-`continue <id> "<prompt>"` sends a follow-up to an existing agent. Do not use
+`continue <id> "<prompt>"` sends a follow-up to an idle/stopped existing agent. Do not use
 `run <id>` for continuation.
+
+`running` lists only active `starting`/`running` sessions in the current workspace.
+
+`steer <id> "<prompt>"` changes direction without waiting for the current worker to finish.
+Providers with same-turn steering (notably Codex app-server) receive it immediately;
+otherwise DevSpace queues the instruction at the next safe turn boundary. Do not
+start a competing second turn just to correct direction.
+
+`stop <id>` stops only the selected agent turn. It is distinct from `agents daemon stop`,
+which shuts down the shared local-agent daemon. DevSpace refuses a fallback stop if
+it would require terminating a provider runtime shared by another active turn.
 
 Continuation supports the same per-turn model and thinking overrides:
 

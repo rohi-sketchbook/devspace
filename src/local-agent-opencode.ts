@@ -122,8 +122,8 @@ export class OpencodeLocalAgentDriver implements LocalAgentDriver {
 
   constructor(private readonly factory: OpencodeFactory = defaultOpencodeFactory) {}
 
-  runtimeKey(_context: LocalAgentRuntimeContext): string {
-    return "opencode:default";
+  runtimeKey(context: LocalAgentRuntimeContext): string {
+    return `opencode:${context.agentId}`;
   }
 
   async createRuntime(context: LocalAgentRuntimeContext) {
