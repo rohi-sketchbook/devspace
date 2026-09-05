@@ -48,6 +48,10 @@ integration of multiple subsystems, and final verification with ChatGPT/host.
 
 Preferred routing:
 
+- When `H:\\codexapp\\AgentTools\\agenttools-mcp-gateway\\config\\codex-models.json`
+  is available, treat its role mapping as the local routing source of truth.
+- Codex Astra (`gpt-6-astra`): complex or long-running end-to-end work where
+  stronger reasoning and preserving a long-lived Codex context materially help.
 - Codex Terra (`gpt-5.6-terra`): focused implementation, mechanical refactors,
   tests, and straightforward bug fixes. Prefer Terra for routine code changes
   that can be reviewed and integrated by the host afterward.
@@ -240,8 +244,9 @@ node H:/codexapp/AgentTools/agenttools-mcp-gateway/src/cli.js workflow review
 Treat the returned `requiresIndependentCodex` and `reviewer` fields as the machine-readable routing decision; do not infer a different reviewer when they are present. The supported modes are:
 
 - `codex`: after the implementation worker hands work back, start a fresh
-  read-only Codex Luna session in the execution workspace and ask it to review
-  the diff, acceptance criteria, regression risk, and test gaps. The reviewer
+  read-only Codex session in the execution workspace using the exact
+  `reviewer.model` and `reviewer.thinking` returned by the policy command, and
+  ask it to review the diff, acceptance criteria, regression risk, and test gaps. The reviewer
   must not edit files. Treat its findings as advisory; the host owns fixes,
   integration, and final verification.
 - `chatgpt`: skip the extra Codex reviewer and perform the review with the host,
