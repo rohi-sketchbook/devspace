@@ -55,6 +55,7 @@ import {
 } from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { openAiConversationScopeId } from "./request-meta.js";
+import { registerBlenderTools, blenderToolInstruction } from "./blender-mcp-tools.js";
 import { registerRohiLocalTools, rohiLocalToolInstruction } from "./rohi-local-tools.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt } from "./skills.js";
@@ -196,7 +197,7 @@ interface ToolLogFields {
 }
 
 function serverInstructions(config: ServerConfig): string {
-  const localToolInstruction = rohiLocalToolInstruction(config);
+  const localToolInstruction = `${rohiLocalToolInstruction(config)}${blenderToolInstruction()}`;
   const artifactInstruction = config.artifactsEnabled && isArtifactDownloadSupportedPlatform()
     ? " When the user supplies or generates a file that is not present on the DevSpace host, use download_artifact with its native file value, the existing workspace ID, and a suitable relative destination path chosen from the user's request and project structure. The tool refuses to overwrite an existing destination and returns the normalized workspace-relative path. Use normal workspace tools when explicit inspection, replacement, movement, renaming, or deletion is needed. Do not recreate binary files with write/edit calls or place signed URLs, native file objects, base64 content, or invented host paths in shell commands or logs."
     : "";
@@ -1666,6 +1667,7 @@ export function createMcpServer(
   }
 
   registerRohiLocalTools(server, { config, workspaces });
+  registerBlenderTools(server, { config, workspaces });
 
   if (config.artifactsEnabled && isArtifactDownloadSupportedPlatform()) {
     registerArtifactTools(server, {

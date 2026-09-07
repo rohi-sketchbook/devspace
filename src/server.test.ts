@@ -84,6 +84,9 @@ test("Rohi local tools expose native image reads and guarded deletion", async (t
   assert.equal(names.has("read_image"), true);
   assert.equal(names.has("delete_path"), true);
   assert.equal(names.has("git_cleanup"), true);
+  assert.equal(names.has("blender_status"), true);
+  assert.equal(names.has("blender_run_script"), true);
+  assert.equal(names.has("blender_render"), true);
 
   const imageBytes = Buffer.from([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
